@@ -15,8 +15,8 @@ REF_TEXT = ("Эпистемический релятивизм предпола�
             "тех пор, пока мы не начали это описывать, оно еще не является "
             "обществом, взаимодействием, экономическим, политическим или "
             "каким-либо иным феноменом.")
-MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
-OUT = "/Users/stepandolzhenko/Documents/Thorium 2.0/out/variants_17b"
+MODEL = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"
+OUT = "/Users/stepandolzhenko/Documents/Thorium 2.0/out/variants"
 SR = 24000
 
 TEXT = open(sys.argv[1]).read().strip() if len(sys.argv) > 1 else None
@@ -26,8 +26,10 @@ BASE = dict(chunk=800, temperature=0.8, top_p=0.8, repetition_penalty=1.0,
             warmup=False, ref_seconds=None)
 
 VARIANTS = [
-    ("H17_как_в_книге", {}),
-    ("I17_чанк_200",    dict(chunk=200)),
+    ("D2_rep_penalty_1.8",   dict(repetition_penalty=1.8)),
+    ("G_реф_обрезан_5с",     dict(ref_seconds=5.0)),
+    ("F2_всё_вместе",        dict(warmup=True, chunk=200,
+                                  repetition_penalty=1.8, temperature=0.6)),
 ]
 
 

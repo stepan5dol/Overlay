@@ -16,18 +16,19 @@ REF_TEXT = ("Эпистемический релятивизм предпола�
             "обществом, взаимодействием, экономическим, политическим или "
             "каким-либо иным феноменом.")
 MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"
-OUT = "/Users/stepandolzhenko/Documents/Thorium 2.0/out/variants_17b"
+OUT = "/Users/stepandolzhenko/Documents/Thorium 2.0/out/variants_reftext"
 SR = 24000
 
 TEXT = open(sys.argv[1]).read().strip() if len(sys.argv) > 1 else None
 
 # baseline == shorttest.py, the settings that produced the existing audiobook
 BASE = dict(chunk=800, temperature=0.8, top_p=0.8, repetition_penalty=1.0,
-            warmup=False, ref_seconds=None)
+            warmup=False, ref_seconds=None,
+            bad_ref_text=False, empty_ref_text=False)
 
 VARIANTS = [
-    ("H17_как_в_книге", {}),
-    ("I17_чанк_200",    dict(chunk=200)),
+    ("J17_реф_текст_неверный", dict(bad_ref_text=True)),
+    ("K17_реф_текст_пустой",   dict(empty_ref_text=True)),
 ]
 
 
@@ -68,11 +69,18 @@ def main():
             ref = os.path.join(OUT, f"_ref{int(cfg['ref_seconds'])}.wav")
             sf.write(ref, y[: int(sr * cfg["ref_seconds"])], sr)
 
+        rt = REF_TEXT
+        if cfg["bad_ref_text"]:
+            rt = ("Вчера на рынке продавали свежую рыбу, картофель и капусту, "
+                  "а под вечер начался сильный дождь с грозой.")
+        if cfg["empty_ref_text"]:
+            rt = None
+
         pieces = []
         for i, chunk in enumerate(split(TEXT, cfg["chunk"])):
             d = os.path.join(tmp, f"c{i:02d}")
             generate_audio(
-                model=model, text=chunk, ref_audio=ref, ref_text=REF_TEXT,
+                model=model, text=chunk, ref_audio=ref, ref_text=rt,
                 language="Russian", lang_code="ru", output_path=d,
                 audio_format="wav", file_prefix="c", verbose=False,
                 temperature=cfg["temperature"], top_p=cfg["top_p"],
