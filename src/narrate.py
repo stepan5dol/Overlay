@@ -84,7 +84,8 @@ def extract(epub_path, target):
 W = {}
 
 
-def init(model_id, ref_audio, ref_text):
+def init(model_id, ref_audio, ref_text, voice=None, language="Russian",
+         lang_code="ru"):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     import warnings; warnings.filterwarnings("ignore")
     from mlx_audio.tts.utils import load_model
@@ -93,16 +94,18 @@ def init(model_id, ref_audio, ref_text):
     # ICL cloning is gated on the speech tokenizer exposing an encoder. A
     # loader bug in mlx-audio leaves it unparsed, in which case cloning
     # silently degrades to speaker-embedding-only. Fail loudly instead.
-    if not getattr(W["model"].speech_tokenizer, "has_encoder", False):
+    if ref_audio and not getattr(W["model"].speech_tokenizer, "has_encoder", False):
         raise RuntimeError(
             "ICL недоступен: у токенизатора речи нет энкодера. "
             "Примените patches/enable_icl_encoder.py к venv.")
     W["gen"] = generate_audio
     W["ref_audio"], W["ref_text"] = ref_audio, ref_text
+    W["voice"], W["language"], W["lang_code"] = voice, language, lang_code
     import tempfile
     with tempfile.TemporaryDirectory() as d:          # warm the MLX graph
-        generate_audio(model=W["model"], text="Готово.", ref_audio=ref_audio,
-                       ref_text=ref_text, language="Russian", lang_code="ru",
+        generate_audio(model=W["model"], text="Ready.", ref_audio=ref_audio,
+                       ref_text=ref_text, voice=voice or "af_heart",
+                       language=language, lang_code=lang_code,
                        output_path=d, audio_format="wav", file_prefix="w",
                        verbose=False)
 
@@ -112,34 +115,47 @@ def synth(task):
     text, path, temperature, top_p = task
     if os.path.exists(path) and os.path.getsize(path) > 1000:
         return path
+    import numpy as np, soundfile as sf
     d = path + ".d"
-    shutil.rmtree(d, ignore_errors=True)
-    try:
-        W["gen"](model=W["model"], text=text, ref_audio=W["ref_audio"],
-                 ref_text=W["ref_text"], language="Russian", lang_code="ru",
-                 output_path=d, audio_format="wav", file_prefix="c",
-                 verbose=False, temperature=temperature, top_p=top_p)
-        import numpy as np, soundfile as sf
-        ws = sorted(glob.glob(os.path.join(d, "**", "*.wav"), recursive=True))
-        if not ws:
-            return None
-        y = np.concatenate([sf.read(w, dtype="float32")[0] for w in ws])
-        sf.write(path, y, SR)
-        return path
-    except Exception as e:
-        print(f"    сбой: {e}", file=sys.stderr, flush=True)
-        return None
-    finally:
+    # A dropped chunk is a sentence missing from the book, so a transient
+    # failure is retried rather than skipped.
+    for attempt in range(3):
         shutil.rmtree(d, ignore_errors=True)
-        gc.collect()
+        os.makedirs(d, exist_ok=True)      # the writer will not create it
+        try:
+            W["gen"](model=W["model"], text=text, ref_audio=W["ref_audio"],
+                     ref_text=W["ref_text"], voice=W["voice"] or "af_heart",
+                     language=W["language"], lang_code=W["lang_code"],
+                     output_path=d, audio_format="wav", file_prefix="c",
+                     verbose=False, temperature=temperature, top_p=top_p)
+            ws = sorted(glob.glob(os.path.join(d, "**", "*.wav"), recursive=True))
+            if not ws:
+                continue
+            y = np.concatenate([sf.read(w, dtype="float32")[0] for w in ws])
+            sf.write(path, y, SR)
+            return path
+        except Exception as e:
+            print(f"    попытка {attempt + 1}/3 не удалась: {e}",
+                  file=sys.stderr, flush=True)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+            gc.collect()
+    print(f"    ЧАНК ПОТЕРЯН: {text[:60]!r}", file=sys.stderr, flush=True)
+    return None
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--epub", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--ref-audio", required=True)
-    ap.add_argument("--ref-text", required=True, help="файл с расшифровкой референса")
+    ap.add_argument("--ref-audio", help="референс для клонирования")
+    ap.add_argument("--ref-text", help="файл с расшифровкой референса")
+    ap.add_argument("--voice", help="пресетный голос вместо клонирования "
+                                    "(serena, ryan, eric, vivian, aiden, dylan…)")
+    ap.add_argument("--language", default="Russian")
+    ap.add_argument("--lang-code", default="ru")
+    ap.add_argument("--limit-chunks", type=int, default=None,
+                    help="озвучить только первые N чанков главы")
     ap.add_argument("--model", default="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit")
     ap.add_argument("--target", type=int, default=200)
     ap.add_argument("--workers", type=int, default=3)
@@ -148,11 +164,17 @@ def main():
     ap.add_argument("--only", type=int, default=None, help="озвучить одну главу")
     args = ap.parse_args()
 
-    ref_text = open(args.ref_text, encoding="utf-8").read().strip()
+    if not args.voice and not (args.ref_audio and args.ref_text):
+        ap.error("нужен либо --voice, либо пара --ref-audio/--ref-text")
+    ref_text = (open(args.ref_text, encoding="utf-8").read().strip()
+                if args.ref_text else None)
     parts = os.path.join(args.out, "parts"); os.makedirs(parts, exist_ok=True)
     chapters = extract(args.epub, args.target)
     if args.only is not None:
         chapters = chapters[args.only:args.only + 1]
+    if args.limit_chunks:
+        for c in chapters:
+            c["chunks"] = c["chunks"][:args.limit_chunks]
     json.dump(chapters, open(os.path.join(args.out, "chapters.json"), "w"),
               ensure_ascii=False, indent=1)
     print(f"глав: {len(chapters)}, чанков: {sum(len(c['chunks']) for c in chapters)}")
@@ -167,12 +189,21 @@ def main():
 
     if todo:
         with mp.Pool(args.workers, initializer=init,
-                     initargs=(args.model, args.ref_audio, ref_text)) as pool:
-            done = 0
-            for _ in pool.imap_unordered(synth, todo):
-                done += 1
-                if done % 10 == 0 or done == len(todo):
-                    print(f"  {done}/{len(todo)}", flush=True)
+                     initargs=(args.model, args.ref_audio, ref_text,
+                               args.voice, args.language, args.lang_code)) as pool:
+            from tqdm import tqdm
+            bar = tqdm(pool.imap_unordered(synth, todo), total=len(todo),
+                       unit="чанк", ncols=88, smoothing=0.05,
+                       bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} "
+                                  "[{elapsed}<{remaining}, {rate_fmt}]")
+            failed = 0
+            for r in bar:
+                if r is None:
+                    failed += 1
+                    bar.set_postfix_str(f"сбоев: {failed}")
+            bar.close()
+            if failed:
+                print(f"не озвучено чанков: {failed}", file=sys.stderr)
     print("готово")
 
 
