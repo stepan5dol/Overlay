@@ -90,6 +90,13 @@ def init(model_id, ref_audio, ref_text):
     from mlx_audio.tts.utils import load_model
     from mlx_audio.tts.generate import generate_audio
     W["model"] = load_model(model_id)
+    # ICL cloning is gated on the speech tokenizer exposing an encoder. A
+    # loader bug in mlx-audio leaves it unparsed, in which case cloning
+    # silently degrades to speaker-embedding-only. Fail loudly instead.
+    if not getattr(W["model"].speech_tokenizer, "has_encoder", False):
+        raise RuntimeError(
+            "ICL недоступен: у токенизатора речи нет энкодера. "
+            "Примените patches/enable_icl_encoder.py к venv.")
     W["gen"] = generate_audio
     W["ref_audio"], W["ref_text"] = ref_audio, ref_text
     import tempfile
