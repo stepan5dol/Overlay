@@ -15,7 +15,28 @@ def pause_after(text):
     return 0.45 if text.rstrip().endswith((".", "!", "?", "”", ":")) else 0.25
 
 
-def concat_chapter(chunks, parts, ci, fade_ms=8):
+def word_spans(text, words, offset, base_id):
+    """Разметка по словам: позиции приходят из системного синтеза.
+
+    Между словами остаются пробелы и знаки препинания исходного текста --
+    они попадают в разметку как есть, вне подсвечиваемых участков.
+    """
+    out, prev = [], 0
+    for k, w in enumerate(sorted(words, key=lambda x: x["loc"])):
+        lo, hi = w["loc"], w["loc"] + w["len"]
+        if lo < prev:
+            continue                       # перекрытие -- пропускаем слово
+        out.append({"gap": text[prev:lo]} if lo > prev else None)
+        out.append({"id": f"{base_id}w{k:03d}", "text": text[lo:hi],
+                    "begin": round(offset + w["begin"], 3),
+                    "end": round(offset + w["end"], 3)})
+        prev = hi
+    if prev < len(text):
+        out.append({"gap": text[prev:]})
+    return [x for x in out if x]
+
+
+def concat_chapter(chunks, parts, ci, fade_ms=8, words_by_id=None):
     n = int(SR * fade_ms / 1000)
     pieces, spans, t = [], [], 0.0
     for i, text in enumerate(chunks):
@@ -30,8 +51,12 @@ def concat_chapter(chunks, parts, ci, fade_ms=8):
             y[:n] *= np.linspace(0, 1, n)
             y[-n:] *= np.linspace(1, 0, n)
         dur = len(y) / SR
-        spans.append({"id": f"s{i:04d}", "text": text,
-                      "begin": round(t, 3), "end": round(t + dur, 3)})
+        w = (words_by_id or {}).get(f"{ci:04d}_{i:04d}")
+        if w:
+            spans.extend(word_spans(text, w, t, f"s{i:04d}"))
+        else:
+            spans.append({"id": f"s{i:04d}", "text": text,
+                          "begin": round(t, 3), "end": round(t + dur, 3)})
         pieces.append(y)
         gap = pause_after(text)
         pieces.append(np.zeros(int(SR * gap), dtype=np.float32))
@@ -89,11 +114,13 @@ def retime(src, dst, speed):
 def build(out_dir, epub_path, title, lang, speed=1.0):
     chapters = json.load(open(os.path.join(out_dir, "chapters.json")))
     parts = os.path.join(out_dir, "parts")
+    wpath = os.path.join(out_dir, "words.json")
+    words_by_id = json.load(open(wpath)) if os.path.exists(wpath) else None
     staging = os.path.join(out_dir, "mo"); os.makedirs(staging, exist_ok=True)
 
     items, navs, total, chdur = [], [], 0.0, {}
     for ci, ch in enumerate(chapters):
-        audio, spans, dur = concat_chapter(ch["chunks"], parts, ci)
+        audio, spans, dur = concat_chapter(ch["chunks"], parts, ci, words_by_id=words_by_id)
         if not spans:
             continue
         total += dur
@@ -105,31 +132,40 @@ def build(out_dir, epub_path, title, lang, speed=1.0):
             os.replace(fast, ap)
             dur /= speed                       # метки сжимаются ровно во столько же
             for s_ in spans:
-                s_["begin"] /= speed
-                s_["end"] /= speed
+                if "begin" in s_:
+                    s_["begin"] /= speed
+                    s_["end"] /= speed
         mp3 = os.path.join(staging, f"ch{ci}.mp4")
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", ap,
                         "-c:a", "aac", "-b:a", "96k", mp3], check=True)
         os.remove(ap)
 
-        paras = "\n".join(
-            f'<p><span id="{s["id"]}">{html.escape(s["text"])}</span></p>'
-            for s in spans)
+        if words_by_id:
+            body = "".join(html.escape(x["gap"]) if "gap" in x else
+                           f'<span id="{x["id"]}">{html.escape(x["text"])}</span>'
+                           for x in spans)
+            paras = f"<p>{body}</p>"
+        else:
+            paras = "\n".join(
+                f'<p><span id="{s["id"]}">{html.escape(s["text"])}</span></p>'
+                for s in spans)
         open(os.path.join(staging, f"ch{ci}.xhtml"), "w").write(
             XHTML.format(title=html.escape(ch["title"][:70]), paras=paras, lang=lang))
 
+        timed = [x for x in spans if "begin" in x]
         pars = "\n".join(
             f'<par id="p{i}"><text src="../text/ch{ci}.xhtml#{s["id"]}"/>'
             f'<audio src="../audio/ch{ci}.mp4" clipBegin="{clock(s["begin"])}"'
             f' clipEnd="{clock(s["end"])}"/></par>'
-            for i, s in enumerate(spans))
+            for i, s in enumerate(timed))
         open(os.path.join(staging, f"ch{ci}.smil"), "w").write(
             SMIL.format(ci=ci, pars=pars))
 
         items.append(ci)
         chdur[ci] = dur
         navs.append((ci, ch["title"][:70]))
-        print(f"  глава {ci}: {len(spans)} фрагментов, {dur/60:.1f} мин")
+        print(f"  глава {ci}: {len(timed)} "
+              f"{'слов' if words_by_id else 'фрагментов'}, {dur/60:.1f} мин")
 
     bid = "urn:uuid:" + str(uuid.uuid4())
     manifest = "\n".join(

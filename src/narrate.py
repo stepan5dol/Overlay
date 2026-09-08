@@ -144,6 +144,67 @@ def synth(task):
     return None
 
 
+def appletts_binary():
+    """Помощник синтеза системным голосом: рядом в app/ или внутри бандла."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
+    for c in (os.path.join(root, "app", "appletts"),
+              os.path.join(root, "Resources", "appletts")):
+        if os.path.exists(c):
+            return c
+    return None
+
+
+def synth_apple(chapters, parts, voice, rate, limit=None):
+    """Системный синтез Apple: один процесс на весь список фрагментов.
+
+    В отличие от нейросетевого движка здесь возвращаются границы каждого
+    слова, поэтому подсветку можно вести пословно. Они складываются в
+    words.json рядом с фрагментами.
+    """
+    binary = appletts_binary()
+    if not binary:
+        sys.exit("не найден appletts; соберите его: app/build.sh")
+
+    tasks = []
+    for ci, ch in enumerate(chapters):
+        for i, text in enumerate(ch["chunks"]):
+            name = f"{ci:04d}_{i:04d}"
+            if not os.path.exists(os.path.join(parts, name + ".wav")):
+                tasks.append({"id": name, "text": text})
+    print(f"к синтезу: {len(tasks)}", flush=True)
+    if not tasks:
+        return
+
+    cmd = [binary, "--out", parts]
+    if voice:
+        cmd += ["--voice", voice]
+    if rate:
+        cmd += ["--rate", str(rate)]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            text=True, bufsize=1)
+    from tqdm import tqdm
+    bar = tqdm(total=len(tasks), unit="фрагмент", ncols=88)
+    words = {}
+    for t in tasks:
+        proc.stdin.write(json.dumps(t, ensure_ascii=False) + "\n")
+        proc.stdin.flush()
+        line = proc.stdout.readline()
+        if not line:
+            break
+        r = json.loads(line)
+        if r.get("error") or not r.get("seconds"):
+            print(f"    не озвучено: {t['text'][:50]!r}", file=sys.stderr)
+        else:
+            words[r["id"]] = r.get("words", [])
+        bar.update(1)
+    bar.close()
+    proc.stdin.close()
+    proc.wait()
+    with open(os.path.join(os.path.dirname(parts), "words.json"), "w") as f:
+        json.dump(words, f, ensure_ascii=False)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--epub", required=True)
@@ -162,12 +223,19 @@ def main():
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--top-p", type=float, default=0.8)
     ap.add_argument("--only", type=int, default=None, help="озвучить одну главу")
+    ap.add_argument("--engine", default="qwen", choices=("qwen", "apple"),
+                    help="qwen -- нейросетевой, apple -- системный голос")
+    ap.add_argument("--rate", type=float, default=None,
+                    help="скорость системного голоса (только для apple)")
     args = ap.parse_args()
 
-    if not args.voice and not (args.ref_audio and args.ref_text):
+    if args.engine == "qwen" and not args.voice and not (args.ref_audio and args.ref_text):
         ap.error("нужен либо --voice, либо пара --ref-audio/--ref-text")
-    ref_text = (open(args.ref_text, encoding="utf-8").read().strip()
-                if args.ref_text else None)
+    if args.engine == "apple":
+        ref_text = None
+    else:
+        ref_text = (open(args.ref_text, encoding="utf-8").read().strip()
+                    if args.ref_text else None)
     parts = os.path.join(args.out, "parts"); os.makedirs(parts, exist_ok=True)
     chapters = extract(args.epub, args.target)
     if args.only is not None:
@@ -178,6 +246,16 @@ def main():
     json.dump(chapters, open(os.path.join(args.out, "chapters.json"), "w"),
               ensure_ascii=False, indent=1)
     print(f"глав: {len(chapters)}, чанков: {sum(len(c['chunks']) for c in chapters)}")
+
+    if args.engine == "apple":
+        synth_apple(chapters, parts, args.voice, args.rate)
+        print("готово")
+        return
+
+    if args.engine == "apple":
+        synth_apple(chapters, parts, args.voice, args.rate)
+        print("готово")
+        return
 
     tasks = []
     for ci, ch in enumerate(chapters):

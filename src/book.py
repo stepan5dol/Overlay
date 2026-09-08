@@ -24,12 +24,42 @@ PRESETS = ["serena", "vivian", "uncle_fu", "ryan", "aiden",
            "ono_anna", "sohee", "eric", "dylan"]
 
 
+def apple_voices(lang=None):
+    """Голоса системы. Хорошие (enhanced/premium) пользователь скачивает сам."""
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    binary = os.path.join(os.path.dirname(here), "app", "appletts")
+    if not os.path.exists(binary):
+        return []
+    try:
+        out = subprocess.run([binary, "--list"], capture_output=True,
+                             text=True, timeout=20).stdout
+        vs = json.loads(out)
+    except Exception:
+        return []
+    # только современный набор: com.apple.speech.synthesis.* -- это старые
+    # шуточные голоса (Bad News, Boing, Bubbles), для книги непригодные,
+    # com.apple.eloquence.* -- ретро-синтез восьмидесятых.
+    vs = [v for v in vs if v["identifier"].startswith("com.apple.voice.")
+          and ".super-compact." not in v["identifier"]]
+    if lang:
+        vs = [v for v in vs if v["language"].lower().startswith(lang)]
+    # хорошие вперёд: их и стоит выбирать
+    order = {"premium": 0, "enhanced": 1, "compact": 2}
+    vs.sort(key=lambda v: (order.get(v["quality"], 3), v["name"]))
+    return vs
+
+
 def available_voices():
-    """Голоса-референсы из refs/ плюс пресеты CustomVoice."""
+    """Три источника голоса: образцы для клонирования, пресеты, система."""
     refs = sorted(n[:-4] for n in os.listdir(REFS)
                   if n.endswith(".wav") and os.path.exists(
                       os.path.join(REFS, n[:-4] + ".txt")))
-    return {"референсы": refs, "пресеты": PRESETS}
+    # только языки, которые конвейер поддерживает, иначе список в сотню строк
+    apple = [f"apple:{v['identifier']}|{v['name']} · {v['language']} · {v['quality']}"
+             for v in apple_voices()
+             if v["language"][:2] in REFERENCE]
+    return {"референсы": refs, "пресеты": PRESETS, "система": apple}
 SPOKEN = {"ru": ("Russian", "ru"), "en": ("English", "en")}
 
 
@@ -100,8 +130,7 @@ def main():
     args = ap.parse_args()
 
     if args.list_voices:
-        v = available_voices()
-        for group, names in v.items():
+        for group, names in available_voices().items():
             print(f"{group}: {', '.join(names)}")
         return
 
@@ -116,9 +145,11 @@ def main():
         sys.exit(f"язык {lang!r} пока не поддержан; есть: {', '.join(REFERENCE)}")
     spoken, code = SPOKEN[lang]
 
+    apple = (args.voice[len("apple:"):].split("|")[0]
+             if (args.voice or "").startswith("apple:") else None)
     preset = args.voice if args.voice in PRESETS else None
     ref = None
-    if not preset:
+    if not preset and not apple:
         name = args.voice or REFERENCE[lang]
         ref = os.path.join(REFS, name)
         if not (os.path.exists(ref + ".wav") and os.path.exists(ref + ".txt")):
@@ -132,19 +163,29 @@ def main():
     model = args.model or (CUSTOM_VOICE_MODEL if preset else None)
     print(f"книга:    {os.path.basename(book)}")
     print(f"язык:     {lang}  ({how})")
-    print(f"голос:    {preset + ' (пресет)' if preset else os.path.basename(ref)}")
+    if apple:
+        print(f"голос:    {apple.split('.')[-1]} (системный, подсветка по словам)")
+    else:
+        print(f"голос:    {preset + ' (пресет)' if preset else os.path.basename(ref)}")
     if abs(args.speed - 1.0) > 1e-3:
         print(f"темп:     {args.speed}x")
-    print(f"правка:   {ensure_patch(args.python) if not preset else 'не нужна для пресетов'}")
+    if apple:
+        print("правка:   не нужна, системный синтез")
+    else:
+        print(f"правка:   {ensure_patch(args.python) if not preset else 'не нужна для пресетов'}")
     print(f"результат: {final}\n", flush=True)
 
     narrate = [args.python, os.path.join(HERE, "narrate.py"),
                "--epub", book, "--out", work,
                "--language", spoken, "--lang-code", code,
                "--workers", str(args.workers)]
-    narrate += (["--voice", preset] if preset
-                else ["--ref-audio", ref + ".wav", "--ref-text", ref + ".txt"])
-    if model:
+    if apple:
+        narrate += ["--engine", "apple", "--voice", apple]
+    elif preset:
+        narrate += ["--voice", preset]
+    else:
+        narrate += ["--ref-audio", ref + ".wav", "--ref-text", ref + ".txt"]
+    if model and not apple:
         narrate += ["--model", model]
     if args.only is not None:
         narrate += ["--only", str(args.only)]
@@ -162,7 +203,7 @@ def main():
 
     manifest = os.path.join(work, "manifest.json")
     json.dump({"книга": book, "язык": lang, "определён": how,
-               "голос": preset or os.path.basename(ref), "темп": args.speed,
+               "голос": apple or preset or os.path.basename(ref), "темп": args.speed,
                "модель": model or "по умолчанию", "результат": final,
                "команды": [" ".join(narrate), " ".join(mo)]},
               open(manifest, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
