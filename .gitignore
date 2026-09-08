@@ -9,3 +9,4 @@ app/AppIcon.iconset/
 __pycache__/
 .venv/
 .DS_Store
+out/

@@ -24,6 +24,37 @@ PRESETS = ["serena", "vivian", "uncle_fu", "ryan", "aiden",
            "ono_anna", "sohee", "eric", "dylan"]
 
 
+KOKORO_LANG = {"a": "американский", "b": "британский"}
+
+
+def kokoro_voices():
+    """Голоса Kokoro: имя кодирует язык и пол (af_ -- amer. female и т.д.)."""
+    import sys as _s
+    _s.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "engines"))
+    from registry import ENGINES, is_ready
+    out = []
+    for eng in ("kokoro", "kokoro-ru"):
+        if not is_ready(eng):
+            continue
+        try:
+            from huggingface_hub import list_repo_files
+            repo = ENGINES[eng]["модели"][0][0]
+            names = sorted({f.split("/")[-1].replace(".pt", "")
+                            for f in list_repo_files(repo)
+                            if f.startswith("voices/") and f.endswith(".pt")})
+        except Exception:
+            continue
+        for n in names:
+            if eng == "kokoro" and n[:1] not in "ab":
+                continue                      # прочие языки конвейер не ведёт
+            out.append(f"{eng}:{n}")
+    return out
+
+
+    return out
+
+
 def apple_voices(lang=None):
     """Голоса системы. Хорошие (enhanced/premium) пользователь скачивает сам."""
     import subprocess
@@ -59,7 +90,18 @@ def available_voices():
     apple = [f"apple:{v['identifier']}|{v['name']} · {v['language']} · {v['quality']}"
              for v in apple_voices()
              if v["language"][:2] in REFERENCE]
-    return {"референсы": refs, "пресеты": PRESETS, "система": apple}
+    kok = []
+    for v in kokoro_voices():
+        eng, name = v.split(":", 1)
+        if eng == "kokoro-ru":
+            label = f"{name} · русский"
+        else:
+            lang = KOKORO_LANG.get(name[:1], "")
+            sex = "жен." if name[1:2] == "f" else "муж."
+            label = f"{name[3:]} · {lang} · {sex}"
+        kok.append(f"{v}|{label}")
+    return {"референсы": refs, "пресеты": PRESETS, "система": apple,
+            "быстрые": kok}
 SPOKEN = {"ru": ("Russian", "ru"), "en": ("English", "en")}
 
 
@@ -172,9 +214,13 @@ def main():
 
     apple = (args.voice[len("apple:"):].split("|")[0]
              if (args.voice or "").startswith("apple:") else None)
+    kokoro = None
+    if (args.voice or "").startswith(("kokoro:", "kokoro-ru:")):
+        eng, name = args.voice.split("|")[0].split(":", 1)
+        kokoro = (eng, name)
     preset = args.voice if args.voice in PRESETS else None
     ref = None
-    if not preset and not apple:
+    if not preset and not apple and not kokoro:
         name = args.voice or REFERENCE[lang]
         ref = os.path.join(REFS, name)
         if not (os.path.exists(ref + ".wav") and os.path.exists(ref + ".txt")):
@@ -191,25 +237,41 @@ def main():
     model = args.model or (CUSTOM_VOICE_MODEL if preset else None)
     print(f"книга:    {os.path.basename(book)}")
     print(f"язык:     {lang}  ({how})")
-    if apple:
+    if kokoro:
+        print(f"голос:    {kokoro[1]} ({kokoro[0]}, быстрый синтез)")
+    elif apple:
         print(f"голос:    {apple.split('.')[-1]} (системный, подсветка по словам)")
     else:
         print(f"голос:    {preset + ' (пресет)' if preset else os.path.basename(ref)}")
     if abs(args.speed - 1.0) > 1e-3:
         print(f"темп:     {args.speed}x")
-    if apple:
-        print("правка:   не нужна, системный синтез")
+    if apple or kokoro:
+        print("правка:   не нужна")
     else:
         print(f"правка:   {ensure_patch(args.python) if not preset else 'не нужна для пресетов'}")
     print(f"папка:    {dest}")
     print(f"результат: {'аудиокнига и EPUB' if args.format == 'both' else ('аудиокнига' if args.format == 'm4b' else 'EPUB с подсветкой')}\n",
           flush=True)
 
-    narrate = [args.python, os.path.join(HERE, "narrate.py"),
+    engine_py = args.python
+    if kokoro:
+        sys.path.insert(0, os.path.join(HERE, "engines"))
+        from registry import env_python, is_ready
+        if not is_ready(kokoro[0]):
+            sys.exit(f"движок {kokoro[0]} не установлен: "
+                     f"python3 src/engines/install.py {kokoro[0]}")
+        engine_py = env_python(kokoro[0])
+
+    narrate = [engine_py, os.path.join(HERE, "narrate.py"),
                "--epub", book, "--out", work,
                "--language", spoken, "--lang-code", code,
                "--workers", str(args.workers)]
-    if apple:
+    if kokoro:
+        eng, name = kokoro
+        narrate += ["--engine", eng, "--voice", name]
+        if eng == "kokoro":
+            narrate += ["--lang-code", "a"]
+    elif apple:
         narrate += ["--engine", "apple", "--voice", apple]
     elif preset:
         narrate += ["--voice", preset]
@@ -222,11 +284,13 @@ def main():
     if args.limit_chunks:
         narrate += ["--limit-chunks", str(args.limit_chunks)]
     run_stage(narrate, "синтез")
+    print("ЭТАП сборка", flush=True)
 
     title = os.path.splitext(os.path.basename(book))[0][:70]
     produced, commands = [], [" ".join(narrate)]
 
     if args.format in ("epub", "both"):
+        print("ЭТАП сборка книги с подсветкой", flush=True)
         mo = [args.python, os.path.join(HERE, "mo.py"), "--out", work,
               "--epub", final, "--title", title, "--lang", code,
               "--speed", str(args.speed)]
@@ -235,6 +299,7 @@ def main():
         produced.append(final)
 
     if args.format in ("m4b", "both"):
+        print("ЭТАП сборка аудиокниги", flush=True)
         asm = [args.python, os.path.join(HERE, "assemble.py"), "--out", work,
                "--title", title, "--m4b"]
         run_stage(asm, "сборка аудиокниги")
@@ -246,10 +311,31 @@ def main():
 
     manifest = os.path.join(work, "manifest.json")
     json.dump({"книга": book, "язык": lang, "определён": how, "формат": args.format,
-               "голос": apple or preset or os.path.basename(ref), "темп": args.speed,
+               "голос": (kokoro[1] if kokoro else
+                         (apple or preset or os.path.basename(ref))),
+               "темп": args.speed,
                "модель": model or "по умолчанию", "результат": produced,
                "команды": commands},
               open(manifest, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    stats = {}
+    try:
+        chs = json.load(open(os.path.join(work, "chapters.json")))
+        stats["главы"] = len(chs)
+        stats["фрагменты"] = sum(len(c["chunks"]) for c in chs)
+        stats["слова"] = sum(len(x.split()) for c in chs for x in c["chunks"])
+        # wave из стандартной библиотеки не читает float-WAV, который
+        # пишет синтез, поэтому длительность берём через soundfile.
+        import soundfile as sf
+        parts_dir = os.path.join(work, "parts")
+        total = sum(sf.info(os.path.join(parts_dir, n)).duration
+                    for n in os.listdir(parts_dir) if n.endswith(".wav"))
+        stats["секунды"] = round(total / max(args.speed, 0.01), 1)
+        stats["байты"] = sum(os.path.getsize(f) for f in produced
+                             if os.path.exists(f))
+    except Exception as e:
+        print(f"статистика неполна: {e}", file=sys.stderr)
+    if stats:
+        print("СТАТИСТИКА " + json.dumps(stats, ensure_ascii=False), flush=True)
     for f in produced:
         print(f"готово: {f}")
 

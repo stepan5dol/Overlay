@@ -94,13 +94,15 @@ def init(model_id, ref_audio, ref_text, voice=None, language="Russian",
     # ICL cloning is gated on the speech tokenizer exposing an encoder. A
     # loader bug in mlx-audio leaves it unparsed, in which case cloning
     # silently degrades to speaker-embedding-only. Fail loudly instead.
-    if ref_audio and not getattr(W["model"].speech_tokenizer, "has_encoder", False):
+    if ref_audio and not getattr(getattr(W["model"], "speech_tokenizer", None),
+                                 "has_encoder", False):
         raise RuntimeError(
             "ICL недоступен: у токенизатора речи нет энкодера. "
             "Примените patches/enable_icl_encoder.py к venv.")
     W["gen"] = generate_audio
     W["ref_audio"], W["ref_text"] = ref_audio, ref_text
     W["voice"], W["language"], W["lang_code"] = voice, language, lang_code
+    W["engine"] = os.environ.get("OVERLAY_ENGINE", "qwen")
     import tempfile
     with tempfile.TemporaryDirectory() as d:          # warm the MLX graph
         generate_audio(model=W["model"], text="Ready.", ref_audio=ref_audio,
@@ -123,11 +125,19 @@ def synth(task):
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d, exist_ok=True)      # the writer will not create it
         try:
-            W["gen"](model=W["model"], text=text, ref_audio=W["ref_audio"],
-                     ref_text=W["ref_text"], voice=W["voice"] or "af_heart",
-                     language=W["language"], lang_code=W["lang_code"],
-                     output_path=d, audio_format="wav", file_prefix="c",
-                     verbose=False, temperature=temperature, top_p=top_p)
+            if W["engine"].startswith("kokoro"):
+                # Kokoro не клонирует и не знает температуры: голос задаётся
+                # именем, язык -- однобуквенным кодом (a/b -- англ., ...).
+                W["gen"](model=W["model"], text=text,
+                         voice=W["voice"] or "af_heart",
+                         lang_code=W["lang_code"], output_path=d,
+                         audio_format="wav", file_prefix="c", verbose=False)
+            else:
+                W["gen"](model=W["model"], text=text, ref_audio=W["ref_audio"],
+                         ref_text=W["ref_text"], voice=W["voice"] or "af_heart",
+                         language=W["language"], lang_code=W["lang_code"],
+                         output_path=d, audio_format="wav", file_prefix="c",
+                         verbose=False, temperature=temperature, top_p=top_p)
             ws = sorted(glob.glob(os.path.join(d, "**", "*.wav"), recursive=True))
             if not ws:
                 continue
@@ -153,6 +163,49 @@ def appletts_binary():
         if os.path.exists(c):
             return c
     return None
+
+
+def synth_stream(chapters, parts, cmd, label):
+    """Синтез внешним помощником, который читает задания из stdin.
+
+    Так работают движки, живущие в своём окружении: системный голос Apple и
+    русская Kokoro. Один процесс на весь прогон -- модель грузится однажды.
+    """
+    tasks = []
+    for ci, ch in enumerate(chapters):
+        for i, text in enumerate(ch["chunks"]):
+            name = f"{ci:04d}_{i:04d}"
+            if not os.path.exists(os.path.join(parts, name + ".wav")):
+                tasks.append({"id": name, "text": text})
+    print(f"к синтезу: {len(tasks)}", flush=True)
+    if not tasks:
+        return {}
+
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            text=True, bufsize=1)
+    from tqdm import tqdm
+    bar = tqdm(total=len(tasks), unit="фрагмент", ncols=88)
+    extra, seen = {}, -1
+    for t in tasks:
+        proc.stdin.write(json.dumps(t, ensure_ascii=False) + "\n")
+        proc.stdin.flush()
+        line = proc.stdout.readline()
+        if not line:
+            break
+        r = json.loads(line)
+        if r.get("error") or not r.get("seconds"):
+            print(f"    не озвучено: {t['text'][:50]!r}", file=sys.stderr)
+        else:
+            extra[r["id"]] = r
+        ci = int(t["id"].split("_")[0])
+        if ci != seen:
+            seen = ci
+            print(f"ГЛАВА {ci + 1} {chapters[ci]['title'][:60]}", flush=True)
+        bar.update(1)
+    bar.close()
+    proc.stdin.close()
+    proc.wait()
+    return extra
 
 
 def synth_apple(chapters, parts, voice, rate, limit=None):
@@ -223,12 +276,14 @@ def main():
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--top-p", type=float, default=0.8)
     ap.add_argument("--only", type=int, default=None, help="озвучить одну главу")
-    ap.add_argument("--engine", default="qwen", choices=("qwen", "apple"),
-                    help="qwen -- нейросетевой, apple -- системный голос")
+    ap.add_argument("--engine", default="qwen",
+                    choices=("qwen", "apple", "kokoro", "kokoro-ru"),
+                    help="движок синтеза")
     ap.add_argument("--rate", type=float, default=None,
                     help="скорость системного голоса (только для apple)")
     args = ap.parse_args()
 
+    os.environ["OVERLAY_ENGINE"] = args.engine
     if args.engine == "qwen" and not args.voice and not (args.ref_audio and args.ref_text):
         ap.error("нужен либо --voice, либо пара --ref-audio/--ref-text")
     if args.engine == "apple":
@@ -253,8 +308,26 @@ def main():
         print("готово")
         return
 
+    if args.engine == "kokoro-ru":
+        helper = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "engines", "kokoro_ru.py")
+        cmd = [sys.executable, helper, "--out", parts,
+               "--voice", args.voice or "sveta"]
+        synth_stream(chapters, parts, cmd, "Kokoro русская")
+        print("готово")
+        return
+
     if args.engine == "apple":
         synth_apple(chapters, parts, args.voice, args.rate)
+        print("готово")
+        return
+
+    if args.engine == "kokoro-ru":
+        helper = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "engines", "kokoro_ru.py")
+        cmd = [sys.executable, helper, "--out", parts,
+               "--voice", args.voice or "sveta"]
+        synth_stream(chapters, parts, cmd, "Kokoro русская")
         print("готово")
         return
 
@@ -265,6 +338,12 @@ def main():
                           args.temperature, args.top_p))
     todo = [t for t in tasks if not os.path.exists(t[1])]
     print(f"к синтезу: {len(todo)} (готово: {len(tasks)-len(todo)})")
+
+    # Kokoro синтезирует в десятки раз быстрее реального времени, и на её
+    # фоне загрузка модели в каждый воркер дороже самой работы: пул из трёх
+    # процессов делает прогон медленнее, а не быстрее.
+    if args.engine.startswith("kokoro"):
+        args.workers = 1
 
     if todo:
         # Рабочие не должны переживать своего родителя: если прогон убит,

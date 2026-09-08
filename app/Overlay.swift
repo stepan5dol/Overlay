@@ -15,6 +15,8 @@ final class Runner: ObservableObject {
     @Published var results: [String] = []
     @Published var chapter: Int = 0
     @Published var chapters: Int = 0
+    @Published var assembling = false
+    @Published var stats: [String: Double] = [:]
     @Published var startedAt: Date? = nil
 
     /// Оценка по уже сделанному: сколько ушло на n фрагментов, столько же
@@ -82,6 +84,7 @@ final class Runner: ObservableObject {
         guard !running else { return }
         running = true; done = 0; total = 0; result = nil; results = []
         chapter = 0; chapters = 0; startedAt = Date()
+        assembling = false; stats = [:]
         log = ""; stage = "Разбор книги…"
 
         let root = repoRoot
@@ -140,6 +143,21 @@ final class Runner: ObservableObject {
                     stage = chapters > 1
                         ? "Глава \(chapter) из \(chapters) · фрагмент \(d) из \(t)"
                         : "Фрагмент \(d) из \(t)"
+                }
+            }
+            if line.hasPrefix("ЭТАП ") {
+                assembling = true
+                let t = String(line.dropFirst(5))
+                stage = t.prefix(1).uppercased() + t.dropFirst()
+            }
+            if line.hasPrefix("СТАТИСТИКА ") {
+                let json = String(line.dropFirst("СТАТИСТИКА ".count))
+                if let d = json.data(using: .utf8),
+                   let o = try? JSONSerialization.jsonObject(with: d)
+                            as? [String: Any] {
+                    var m: [String: Double] = [:]
+                    for (k, v) in o { m[k] = (v as? NSNumber)?.doubleValue ?? 0 }
+                    stats = m
                 }
             }
             if line.hasPrefix("ГЛАВЫ ") {
@@ -371,9 +389,10 @@ struct ContentView: View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(runner.total > 0
-                         ? "\(Int(Double(runner.done) / Double(runner.total) * 100))%"
-                         : "…")
+                    Text(runner.assembling ? "Сборка"
+                         : (runner.total > 0
+                            ? "\(Int(Double(runner.done) / Double(runner.total) * 100))%"
+                            : "…"))
                         .font(.system(size: 30, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .contentTransition(.numericText())
@@ -382,10 +401,14 @@ struct ContentView: View {
                         Text(r).font(.callout).foregroundStyle(.secondary).monospacedDigit()
                     }
                 }
-                ProgressView(value: Double(runner.done),
-                             total: Double(max(runner.total, 1)))
-                    .progressViewStyle(.linear)
-                if runner.chapters > 1 {
+                if runner.assembling {
+                    ProgressView().progressViewStyle(.linear)
+                } else {
+                    ProgressView(value: Double(runner.done),
+                                 total: Double(max(runner.total, 1)))
+                        .progressViewStyle(.linear)
+                }
+                if runner.chapters > 1 && !runner.assembling {
                     HStack(spacing: 6) {
                         Image(systemName: "book.pages").foregroundStyle(.tertiary)
                         Text("Глава \(runner.chapter) из \(runner.chapters)")
@@ -399,17 +422,41 @@ struct ContentView: View {
         }
     }
 
+    /// Итог одной строкой: длительность, объём текста, размер файлов.
+    private var statLine: String {
+        let s = runner.stats
+        var parts: [String] = []
+        if let sec = s["секунды"], sec > 0 {
+            let h = Int(sec) / 3600, m = (Int(sec) % 3600) / 60
+            parts.append(h > 0 ? "\(h) ч \(m) мин" : "\(m) мин")
+        }
+        if let w = s["слова"], w > 0 {
+            parts.append("\(Int(w)) слов")
+        }
+        if let ch = s["главы"], ch > 1 {
+            parts.append("\(Int(ch)) глав")
+        }
+        if let b = s["байты"], b > 0 {
+            parts.append(ByteCountFormatter.string(fromByteCount: Int64(b),
+                                                   countStyle: .file))
+        }
+        return parts.joined(separator: " · ")
+    }
+
     private var resultCard: some View {
         Card {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 28))
                     .foregroundStyle(.white, Color.accentColor)
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Книга озвучена").font(.headline)
+                    if !runner.stats.isEmpty {
+                        Text(statLine).font(.callout).foregroundStyle(.secondary)
+                    }
                     ForEach(runner.results, id: \.self) { r in
                         Text(URL(fileURLWithPath: r).lastPathComponent)
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.tertiary)
                             .lineLimit(1).truncationMode(.middle)
                     }
                 }
