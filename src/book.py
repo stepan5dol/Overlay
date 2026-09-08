@@ -14,7 +14,7 @@ ROOT = os.path.dirname(HERE)
 REFS = os.path.join(ROOT, "refs")
 
 REFERENCE = {                       # язык -> голос по умолчанию, пара wav/txt в refs/
-    "ru": "ru_female",
+    "ru": "vakhshtayn",
     "en": "en_female_ljspeech",
 }
 # Пресеты озвучиваются моделью CustomVoice: ей референс не нужен, но и
