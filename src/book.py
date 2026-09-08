@@ -17,19 +17,19 @@ REFERENCE = {                       # язык -> голос по умолчан
     "ru": "vakhshtayn",
     "en": "linda_johnson",
 }
-# Пресеты озвучиваются моделью CustomVoice: ей референс не нужен, но и
-# клонировать она не умеет -- это другой путь генерации.
-CUSTOM_VOICE_MODEL = "/Users/stepandolzhenko/qwen3-tts-apple-silicon/qwen3-tts-patched"
-PRESETS = ["serena", "vivian", "uncle_fu", "ryan", "aiden",
-           "ono_anna", "sohee", "eric", "dylan"]
+# Модель CustomVoice умеет девять готовых голосов и не требует образца, но
+# в список не вынесена: её вывод никто не слушал, а тянет она за собой
+# локальную копию модели с правленым tokenizer_config. Вернуть можно,
+# когда голоса будут проверены на слух.
+PRESETS = []
 
 
 def available_voices():
-    """Голоса-референсы из refs/ плюс пресеты CustomVoice."""
+    """Образцы голоса из refs/ -- только те, у кого есть расшифровка."""
     refs = sorted(n[:-4] for n in os.listdir(REFS)
                   if n.endswith(".wav") and os.path.exists(
                       os.path.join(REFS, n[:-4] + ".txt")))
-    return {"референсы": refs, "пресеты": PRESETS}
+    return {"образцы": refs}
 SPOKEN = {"ru": ("Russian", "ru"), "en": ("English", "en")}
 
 
@@ -129,7 +129,7 @@ def main():
     final = args.epub_out or os.path.join(ROOT, "out", slug(book) + "_overlay.epub")
     os.makedirs(work, exist_ok=True)
 
-    model = args.model or (CUSTOM_VOICE_MODEL if preset else None)
+    model = args.model
     print(f"книга:    {os.path.basename(book)}")
     print(f"язык:     {lang}  ({how})")
     print(f"голос:    {preset + ' (пресет)' if preset else os.path.basename(ref)}")
