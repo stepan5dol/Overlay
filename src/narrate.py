@@ -245,6 +245,7 @@ def main():
             c["chunks"] = c["chunks"][:args.limit_chunks]
     json.dump(chapters, open(os.path.join(args.out, "chapters.json"), "w"),
               ensure_ascii=False, indent=1)
+    print(f"ГЛАВЫ {len(chapters)}", flush=True)
     print(f"глав: {len(chapters)}, чанков: {sum(len(c['chunks']) for c in chapters)}")
 
     if args.engine == "apple":
@@ -266,19 +267,36 @@ def main():
     print(f"к синтезу: {len(todo)} (готово: {len(tasks)-len(todo)})")
 
     if todo:
+        # Рабочие не должны переживать своего родителя: если прогон убит,
+        # пул уходит вместе с ним, а не остаётся сиротой на GPU.
+        import atexit, signal as _sig
+        def _reap(*_):
+            for c in mp.active_children():
+                c.terminate()
+            sys.exit(130)
+        _sig.signal(_sig.SIGTERM, _reap)
+        _sig.signal(_sig.SIGINT, _reap)
+        atexit.register(lambda: [c.terminate() for c in mp.active_children()])
+
         with mp.Pool(args.workers, initializer=init,
                      initargs=(args.model, args.ref_audio, ref_text,
                                args.voice, args.language, args.lang_code)) as pool:
             from tqdm import tqdm
-            bar = tqdm(pool.imap_unordered(synth, todo), total=len(todo),
+            # imap (не unordered): фрагменты идут по порядку глав, иначе
+            # «глава 3 из 40» ничего не значит
+            bar = tqdm(pool.imap(synth, todo), total=len(todo),
                        unit="чанк", ncols=88, smoothing=0.05,
                        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} "
                                   "[{elapsed}<{remaining}, {rate_fmt}]")
-            failed = 0
-            for r in bar:
+            failed, seen = 0, -1
+            for k, r in enumerate(bar):
                 if r is None:
                     failed += 1
                     bar.set_postfix_str(f"сбоев: {failed}")
+                ci = int(os.path.basename(todo[k][1]).split("_")[0])
+                if ci != seen:
+                    seen = ci
+                    print(f"ГЛАВА {ci + 1} {chapters[ci]['title'][:60]}", flush=True)
             bar.close()
             if failed:
                 print(f"не озвучено чанков: {failed}", file=sys.stderr)

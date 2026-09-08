@@ -7,7 +7,7 @@ mlx-audio применяется сама. Никаких обязательны
 Прогресс печатается строками вида `ПРОГРЕСС n/N`, чтобы поверх можно было
 надеть интерфейс.
 """
-import argparse, json, os, re, subprocess, sys, unicodedata
+import argparse, json, os, re, signal, subprocess, sys, unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -105,6 +105,28 @@ def ensure_patch(python):
     return "применена сейчас"
 
 
+def run_stage(cmd, name):
+    """Запуск шага в своей группе процессов.
+
+    Своя группа нужна, чтобы прогон не зависел от того, кто его начал:
+    гибель родителя не уносит с собой синтез, а остановка одного прогона
+    не задевает соседние. Сигнал остановки передаётся всей группе, то есть
+    и рабочим процессам пула тоже.
+    """
+    proc = subprocess.Popen(cmd, start_new_session=True)
+    try:
+        code = proc.wait()
+    except KeyboardInterrupt:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        sys.exit(f"{name}: остановлено")
+    if code != 0:
+        sys.exit(f"{name}: завершилось с ошибкой ({code})")
+
+
 def slug(path):
     name = os.path.splitext(os.path.basename(path))[0]
     name = re.sub(r"\s*\([^)]*\)", "", name)
@@ -127,6 +149,9 @@ def main():
     ap.add_argument("--speed", type=float, default=1.0,
                     help="темп речи, применяется после синтеза")
     ap.add_argument("--list-voices", action="store_true")
+    ap.add_argument("--format", default="epub", choices=("epub", "m4b", "both"),
+                    help="epub с подсветкой, аудиокнига m4b, или оба")
+    ap.add_argument("--dest", help="куда положить результат")
     args = ap.parse_args()
 
     if args.list_voices:
@@ -157,7 +182,10 @@ def main():
                      f"доступные: {available_voices()}")
 
     work = args.out or os.path.join(ROOT, "out", slug(book))
-    final = args.epub_out or os.path.join(ROOT, "out", slug(book) + "_overlay.epub")
+    dest = args.dest or os.path.expanduser("~/Documents")
+    os.makedirs(dest, exist_ok=True)
+    final = args.epub_out or os.path.join(dest, slug(book) + "_overlay.epub")
+    m4b = os.path.join(dest, slug(book) + ".m4b")
     os.makedirs(work, exist_ok=True)
 
     model = args.model or (CUSTOM_VOICE_MODEL if preset else None)
@@ -173,7 +201,9 @@ def main():
         print("правка:   не нужна, системный синтез")
     else:
         print(f"правка:   {ensure_patch(args.python) if not preset else 'не нужна для пресетов'}")
-    print(f"результат: {final}\n", flush=True)
+    print(f"папка:    {dest}")
+    print(f"результат: {'аудиокнига и EPUB' if args.format == 'both' else ('аудиокнига' if args.format == 'm4b' else 'EPUB с подсветкой')}\n",
+          flush=True)
 
     narrate = [args.python, os.path.join(HERE, "narrate.py"),
                "--epub", book, "--out", work,
@@ -191,23 +221,37 @@ def main():
         narrate += ["--only", str(args.only)]
     if args.limit_chunks:
         narrate += ["--limit-chunks", str(args.limit_chunks)]
-    if subprocess.run(narrate).returncode != 0:
-        sys.exit("синтез прерван")
+    run_stage(narrate, "синтез")
 
     title = os.path.splitext(os.path.basename(book))[0][:70]
-    mo = [args.python, os.path.join(HERE, "mo.py"), "--out", work,
-          "--epub", final, "--title", title, "--lang", code,
-          "--speed", str(args.speed)]
-    if subprocess.run(mo).returncode != 0:
-        sys.exit("сборка EPUB прервана")
+    produced, commands = [], [" ".join(narrate)]
+
+    if args.format in ("epub", "both"):
+        mo = [args.python, os.path.join(HERE, "mo.py"), "--out", work,
+              "--epub", final, "--title", title, "--lang", code,
+              "--speed", str(args.speed)]
+        run_stage(mo, "сборка EPUB")
+        commands.append(" ".join(mo))
+        produced.append(final)
+
+    if args.format in ("m4b", "both"):
+        asm = [args.python, os.path.join(HERE, "assemble.py"), "--out", work,
+               "--title", title, "--m4b"]
+        run_stage(asm, "сборка аудиокниги")
+        commands.append(" ".join(asm))
+        built = os.path.join(work, "audiobook.m4b")
+        if os.path.exists(built):
+            os.replace(built, m4b)
+            produced.append(m4b)
 
     manifest = os.path.join(work, "manifest.json")
-    json.dump({"книга": book, "язык": lang, "определён": how,
+    json.dump({"книга": book, "язык": lang, "определён": how, "формат": args.format,
                "голос": apple or preset or os.path.basename(ref), "темп": args.speed,
-               "модель": model or "по умолчанию", "результат": final,
-               "команды": [" ".join(narrate), " ".join(mo)]},
+               "модель": model or "по умолчанию", "результат": produced,
+               "команды": commands},
               open(manifest, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    print(f"\nготово: {final}")
+    for f in produced:
+        print(f"готово: {f}")
 
 
 if __name__ == "__main__":

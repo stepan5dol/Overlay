@@ -12,6 +12,9 @@ final class Runner: ObservableObject {
     @Published var stage: String = "Перетащите книгу в окно"
     @Published var log: String = ""
     @Published var result: String? = nil
+    @Published var results: [String] = []
+    @Published var chapter: Int = 0
+    @Published var chapters: Int = 0
     @Published var startedAt: Date? = nil
 
     /// Оценка по уже сделанному: сколько ушло на n фрагментов, столько же
@@ -74,9 +77,11 @@ final class Runner: ObservableObject {
             ?? "/usr/bin/python3"
     }
 
-    func run(book: String, language: String, voice: String, speed: Double) {
+    func run(book: String, language: String, voice: String, speed: Double,
+             format: String, dest: String) {
         guard !running else { return }
-        running = true; done = 0; total = 0; result = nil; startedAt = Date()
+        running = true; done = 0; total = 0; result = nil; results = []
+        chapter = 0; chapters = 0; startedAt = Date()
         log = ""; stage = "Разбор книги…"
 
         let root = repoRoot
@@ -86,6 +91,8 @@ final class Runner: ObservableObject {
         if language != "auto" { argv += ["--language", language] }
         if !voice.isEmpty { argv += ["--voice", voice] }
         if abs(speed - 1.0) > 0.001 { argv += ["--speed", String(format: "%.2f", speed)] }
+        argv += ["--format", format]
+        if !dest.isEmpty { argv += ["--dest", dest] }
         p.arguments = argv
         p.currentDirectoryURL = URL(fileURLWithPath: root)
 
@@ -109,8 +116,12 @@ final class Runner: ObservableObject {
         }
     }
 
+    /// Останавливает весь свой прогон -- посредника и рабочие процессы
+    /// синтеза, -- не задевая другие запущенные прогоны.
     func stop() {
-        task?.terminate()
+        guard let p = task, p.isRunning else { running = false; return }
+        let gid = getpgid(p.processIdentifier)
+        if gid > 0 { killpg(gid, SIGTERM) } else { p.terminate() }
         running = false
         stage = "Остановлено"
     }
@@ -119,15 +130,29 @@ final class Runner: ObservableObject {
         for raw in chunk.replacingOccurrences(of: "\r", with: "\n").split(
             separator: "\n", omittingEmptySubsequences: true) {
             let line = String(raw)
-            if let m = line.range(of: #"(\d+)/(\d+)"#, options: .regularExpression) {
-                let parts = line[m].split(separator: "/")
-                if parts.count == 2, let d = Int(parts[0]), let t = Int(parts[1]), t > 1 {
+            // Полосу двигает только счётчик tqdm вида "17/218 [". Строка
+            // "к синтезу: 0 (готово: 218)" тоже содержит числа, и без этой
+            // проверки прогресс скакал на 100% в самом начале.
+            if let m = line.range(of: #"(\d+)/(\d+) \["#, options: .regularExpression) {
+                let nums = line[m].dropLast(2).split(separator: "/")
+                if nums.count == 2, let d = Int(nums[0]), let t = Int(nums[1]), t > 0 {
                     done = d; total = t
-                    stage = "Озвучка: \(d) из \(t)"
+                    stage = chapters > 1
+                        ? "Глава \(chapter) из \(chapters) · фрагмент \(d) из \(t)"
+                        : "Фрагмент \(d) из \(t)"
                 }
             }
+            if line.hasPrefix("ГЛАВЫ ") {
+                chapters = Int(line.dropFirst(6).trimmingCharacters(in: .whitespaces)) ?? 0
+            }
+            if line.hasPrefix("ГЛАВА ") {
+                let rest = line.dropFirst(6)
+                chapter = Int(rest.prefix(while: { $0.isNumber })) ?? chapter
+            }
             if line.hasPrefix("готово: ") {
-                result = String(line.dropFirst("готово: ".count))
+                let path = String(line.dropFirst("готово: ".count))
+                results.append(path)
+                result = path
             }
             if line.hasPrefix("язык:") || line.hasPrefix("голос:") || line.hasPrefix("книга:") {
                 stage = line
@@ -207,6 +232,12 @@ struct ContentView: View {
     @AppStorage("language") private var language = "auto"
     @AppStorage("voice") private var voice = ""
     @AppStorage("speed") private var speed = 1.0
+    @AppStorage("format") private var format = "epub"
+    @AppStorage("dest") private var dest = ""
+
+    private var destPath: String {
+        dest.isEmpty ? NSHomeDirectory() + "/Documents" : dest
+    }
     @State private var showLog = false
 
     /// Панель «Устный контент» в Системных настройках: оттуда качаются
@@ -221,7 +252,17 @@ struct ContentView: View {
     }
 
     private func start(_ path: String) {
-        runner.run(book: path, language: language, voice: voice, speed: speed)
+        runner.run(book: path, language: language, voice: voice, speed: speed,
+                   format: format, dest: destPath)
+    }
+
+    private func pickFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: destPath)
+        if panel.runModal() == .OK, let u = panel.url { dest = u.path }
     }
 
     // MARK: настройки
@@ -259,25 +300,47 @@ struct ContentView: View {
                         }
                     }.labelsHidden().pickerStyle(.menu)
                 }
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform.badge.plus").foregroundStyle(.secondary)
+                    Text("Системные голоса высокого качества")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("скачать в настройках") { openVoiceSettings() }
+                        .buttonStyle(.link).font(.caption)
+                    Spacer()
+                }
                 if voice.hasPrefix("apple:") && voice.contains(".compact.") {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Базовое качество голоса")
-                                .font(.callout.weight(.medium))
-                            Text("Улучшенные голоса Apple не устанавливает сама и не "
-                                 + "разрешает скачивать из приложений — только вручную, "
-                                 + "один раз.")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Button("Открыть настройки голосов") { openVoiceSettings() }
-                                .buttonStyle(.link).font(.caption)
-                        }
+                        Text("Выбран голос базового качества. Улучшенные Apple не "
+                             + "разрешает скачивать из приложений — только вручную, "
+                             + "в разделе «Устный контент». Голоса Siri сторонним "
+                             + "приложениям недоступны вовсе.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.orange.opacity(0.10)))
+                }
+                Divider().opacity(0.5)
+                row("Результат") {
+                    Picker("", selection: $format) {
+                        Text("Книга с подсветкой").tag("epub")
+                        Text("Аудиокнига M4B").tag("m4b")
+                        Text("И то, и другое").tag("both")
+                    }.labelsHidden().pickerStyle(.menu)
+                }
+                Divider().opacity(0.5)
+                row("Папка") {
+                    HStack(spacing: 8) {
+                        Text((destPath as NSString).abbreviatingWithTildeInPath)
+                            .font(.callout).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                        Button("Изменить…") { pickFolder() }
+                            .buttonStyle(.link).font(.callout)
+                        Spacer()
+                    }
                 }
                 Divider().opacity(0.5)
                 row("Темп") {
@@ -322,6 +385,13 @@ struct ContentView: View {
                 ProgressView(value: Double(runner.done),
                              total: Double(max(runner.total, 1)))
                     .progressViewStyle(.linear)
+                if runner.chapters > 1 {
+                    HStack(spacing: 6) {
+                        Image(systemName: "book.pages").foregroundStyle(.tertiary)
+                        Text("Глава \(runner.chapter) из \(runner.chapters)")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
                 Text(runner.stage)
                     .font(.callout).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
@@ -331,20 +401,23 @@ struct ContentView: View {
 
     private var resultCard: some View {
         Card {
-            HStack(spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 28))
                     .foregroundStyle(.white, Color.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Книга озвучена").font(.headline)
-                    Text(URL(fileURLWithPath: runner.result ?? "").lastPathComponent)
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle)
+                    ForEach(runner.results, id: \.self) { r in
+                        Text(URL(fileURLWithPath: r).lastPathComponent)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
                 }
                 Spacer()
                 Button("Показать") {
-                    if let r = runner.result {
-                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: r)])
+                    let urls = runner.results.map { URL(fileURLWithPath: $0) }
+                    if !urls.isEmpty {
+                        NSWorkspace.shared.activateFileViewerSelecting(urls)
                     }
                 }.buttonStyle(.glassProminent)
             }

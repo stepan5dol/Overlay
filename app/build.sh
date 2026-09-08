@@ -37,4 +37,13 @@ PLIST
 
 [ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/"
 codesign --force --deep -s - "$APP" 2>/dev/null || true
+# Ставим сразу: собранное, но не установленное приложение -- источник
+# путаницы, окно продолжает работать по старой версии.
+if [ "${THORIUM_NO_INSTALL:-}" != "1" ]; then
+  pkill -x Overlay 2>/dev/null || true
+  sleep 1
+  rm -rf "/Applications/$APP"
+  cp -R "$APP" /Applications/
+  echo "установлено: /Applications/$APP"
+fi
 echo "собрано: $(pwd)/$APP"
