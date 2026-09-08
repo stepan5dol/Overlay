@@ -33,7 +33,8 @@ final class Runner: ObservableObject {
             guard parts.count == 2 else { continue }
             let names = parts[1].split(separator: ",").map {
                 $0.trimmingCharacters(in: .whitespaces) }
-            if line.hasPrefix("образцы") { voices = names }
+            if line.hasPrefix("референсы") { voices = names }
+            if line.hasPrefix("пресеты") { presets = names }
         }
     }
 
@@ -166,7 +167,7 @@ struct ContentView: View {
     @AppStorage("speed") private var speed = 1.0
 
     private var voiceGroups: [(String, [String])] {
-        [("Голоса", runner.voices)]
+        [("Клонирование по образцу", runner.voices), ("Готовые голоса", runner.presets)]
     }
 
     private func start(_ path: String) {
