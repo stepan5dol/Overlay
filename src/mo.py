@@ -5,7 +5,7 @@ duration is known and no forced alignment is involved. Each chunk becomes one
 <span id>, and the SMIL points at it with clipBegin/clipEnd into the chapter's
 concatenated audio.
 """
-import argparse, json, os, zipfile, html, uuid
+import argparse, json, os, subprocess, zipfile, html, uuid
 import numpy as np, soundfile as sf
 
 SR = 24000
@@ -69,7 +69,24 @@ SMIL = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
-def build(out_dir, epub_path, title, lang):
+def atempo_chain(speed):
+    """ffmpeg atempo принимает 0.5..2.0 за раз, большее набирается цепочкой."""
+    parts, s = [], speed
+    while s > 2.0:
+        parts.append("atempo=2.0"); s /= 2.0
+    while s < 0.5:
+        parts.append("atempo=0.5"); s /= 0.5
+    parts.append(f"atempo={s:.4f}")
+    return ",".join(parts)
+
+
+def retime(src, dst, speed):
+    """Меняет темп, не трогая высоту голоса."""
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src,
+                    "-filter:a", atempo_chain(speed), dst], check=True)
+
+
+def build(out_dir, epub_path, title, lang, speed=1.0):
     chapters = json.load(open(os.path.join(out_dir, "chapters.json")))
     parts = os.path.join(out_dir, "parts")
     staging = os.path.join(out_dir, "mo"); os.makedirs(staging, exist_ok=True)
@@ -82,8 +99,17 @@ def build(out_dir, epub_path, title, lang):
         total += dur
         ap = os.path.join(staging, f"ch{ci}.wav")
         sf.write(ap, audio, SR)
+        if abs(speed - 1.0) > 1e-3:
+            fast = ap.replace(".wav", "_speed.wav")
+            retime(ap, fast, speed)
+            os.replace(fast, ap)
+            dur /= speed                       # метки сжимаются ровно во столько же
+            for s_ in spans:
+                s_["begin"] /= speed
+                s_["end"] /= speed
         mp3 = os.path.join(staging, f"ch{ci}.mp4")
-        os.system(f'ffmpeg -y -v error -i "{ap}" -c:a aac -b:a 96k "{mp3}"')
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", ap,
+                        "-c:a", "aac", "-b:a", "96k", mp3], check=True)
         os.remove(ap)
 
         paras = "\n".join(
@@ -164,5 +190,7 @@ if __name__ == "__main__":
     ap.add_argument("--epub", required=True)
     ap.add_argument("--title", default="Книга")
     ap.add_argument("--lang", default="ru")
+    ap.add_argument("--speed", type=float, default=1.0,
+                    help="темп речи; модель его не умеет, применяется после синтеза")
     a = ap.parse_args()
-    build(a.out, a.epub, a.title, a.lang)
+    build(a.out, a.epub, a.title, a.lang, a.speed)

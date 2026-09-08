@@ -13,10 +13,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 REFS = os.path.join(ROOT, "refs")
 
-REFERENCE = {                       # язык -> имя пары wav/txt в refs/
+REFERENCE = {                       # язык -> голос по умолчанию, пара wav/txt в refs/
     "ru": "ru_female",
     "en": "en_female_ljspeech",
 }
+# Пресеты озвучиваются моделью CustomVoice: ей референс не нужен, но и
+# клонировать она не умеет -- это другой путь генерации.
+CUSTOM_VOICE_MODEL = "/Users/stepandolzhenko/qwen3-tts-apple-silicon/qwen3-tts-patched"
+PRESETS = ["serena", "vivian", "uncle_fu", "ryan", "aiden",
+           "ono_anna", "sohee", "eric", "dylan"]
+
+
+def available_voices():
+    """Голоса-референсы из refs/ плюс пресеты CustomVoice."""
+    refs = sorted(n[:-4] for n in os.listdir(REFS)
+                  if n.endswith(".wav") and os.path.exists(
+                      os.path.join(REFS, n[:-4] + ".txt")))
+    return {"референсы": refs, "пресеты": PRESETS}
 SPOKEN = {"ru": ("Russian", "ru"), "en": ("English", "en")}
 
 
@@ -70,7 +83,7 @@ def slug(path):
 
 def main():
     ap = argparse.ArgumentParser(description="EPUB -> EPUB с синхронной озвучкой")
-    ap.add_argument("book", help="путь к .epub")
+    ap.add_argument("book", nargs="?", help="путь к .epub")
     ap.add_argument("--out", help="каталог для работы (по умолчанию out/<имя>)")
     ap.add_argument("--epub-out", help="итоговый файл (по умолчанию рядом с out)")
     ap.add_argument("--only", type=int, help="озвучить одну главу по номеру")
@@ -79,8 +92,21 @@ def main():
     ap.add_argument("--python", default=sys.executable,
                     help="python с mlx-audio")
     ap.add_argument("--language", help="ru или en, если определять не нужно")
+    ap.add_argument("--voice", help="имя референса из refs/ или пресет CustomVoice")
+    ap.add_argument("--model", help="путь или идентификатор модели")
+    ap.add_argument("--speed", type=float, default=1.0,
+                    help="темп речи, применяется после синтеза")
+    ap.add_argument("--list-voices", action="store_true")
     args = ap.parse_args()
 
+    if args.list_voices:
+        v = available_voices()
+        for group, names in v.items():
+            print(f"{group}: {', '.join(names)}")
+        return
+
+    if not args.book:
+        ap.error("не указана книга")
     book = os.path.abspath(args.book)
     if not os.path.exists(book):
         sys.exit(f"нет такого файла: {book}")
@@ -89,25 +115,37 @@ def main():
     if lang not in REFERENCE:
         sys.exit(f"язык {lang!r} пока не поддержан; есть: {', '.join(REFERENCE)}")
     spoken, code = SPOKEN[lang]
-    ref = os.path.join(REFS, REFERENCE[lang])
-    if not (os.path.exists(ref + ".wav") and os.path.exists(ref + ".txt")):
-        sys.exit(f"нет референса для языка {lang}: {ref}.wav/.txt")
+
+    preset = args.voice if args.voice in PRESETS else None
+    ref = None
+    if not preset:
+        name = args.voice or REFERENCE[lang]
+        ref = os.path.join(REFS, name)
+        if not (os.path.exists(ref + ".wav") and os.path.exists(ref + ".txt")):
+            sys.exit(f"нет такого голоса: {name}\n"
+                     f"доступные: {available_voices()}")
 
     work = args.out or os.path.join(ROOT, "out", slug(book))
     final = args.epub_out or os.path.join(ROOT, "out", slug(book) + "_overlay.epub")
     os.makedirs(work, exist_ok=True)
 
+    model = args.model or (CUSTOM_VOICE_MODEL if preset else None)
     print(f"книга:    {os.path.basename(book)}")
     print(f"язык:     {lang}  ({how})")
-    print(f"голос:    {REFERENCE[lang]}")
-    print(f"правка:   {ensure_patch(args.python)}")
+    print(f"голос:    {preset + ' (пресет)' if preset else os.path.basename(ref)}")
+    if abs(args.speed - 1.0) > 1e-3:
+        print(f"темп:     {args.speed}x")
+    print(f"правка:   {ensure_patch(args.python) if not preset else 'не нужна для пресетов'}")
     print(f"результат: {final}\n", flush=True)
 
     narrate = [args.python, os.path.join(HERE, "narrate.py"),
                "--epub", book, "--out", work,
-               "--ref-audio", ref + ".wav", "--ref-text", ref + ".txt",
                "--language", spoken, "--lang-code", code,
                "--workers", str(args.workers)]
+    narrate += (["--voice", preset] if preset
+                else ["--ref-audio", ref + ".wav", "--ref-text", ref + ".txt"])
+    if model:
+        narrate += ["--model", model]
     if args.only is not None:
         narrate += ["--only", str(args.only)]
     if args.limit_chunks:
@@ -117,13 +155,15 @@ def main():
 
     title = os.path.splitext(os.path.basename(book))[0][:70]
     mo = [args.python, os.path.join(HERE, "mo.py"), "--out", work,
-          "--epub", final, "--title", title, "--lang", code]
+          "--epub", final, "--title", title, "--lang", code,
+          "--speed", str(args.speed)]
     if subprocess.run(mo).returncode != 0:
         sys.exit("сборка EPUB прервана")
 
     manifest = os.path.join(work, "manifest.json")
     json.dump({"книга": book, "язык": lang, "определён": how,
-               "референс": REFERENCE[lang], "результат": final,
+               "голос": preset or os.path.basename(ref), "темп": args.speed,
+               "модель": model or "по умолчанию", "результат": final,
                "команды": [" ".join(narrate), " ".join(mo)]},
               open(manifest, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(f"\nготово: {final}")

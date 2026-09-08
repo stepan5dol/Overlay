@@ -15,6 +15,29 @@ final class Runner: ObservableObject {
 
     private var task: Process?
 
+    @Published var voices: [String] = []
+    @Published var presets: [String] = []
+
+    /// Список голосов берётся у самого конвейера, чтобы не расходился с refs/.
+    func loadVoices() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: python)
+        p.arguments = [repoRoot + "/src/book.py", "--list-voices"]
+        let pipe = Pipe(); p.standardOutput = pipe
+        do { try p.run() } catch { return }
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                         encoding: .utf8) ?? ""
+        p.waitUntilExit()
+        for line in out.split(separator: "\n") {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            let names = parts[1].split(separator: ",").map {
+                $0.trimmingCharacters(in: .whitespaces) }
+            if line.hasPrefix("референсы") { voices = names }
+            if line.hasPrefix("пресеты") { presets = names }
+        }
+    }
+
     // Путь к репозиторию прописывается при сборке, чтобы бандл можно было
     // положить в /Applications. Если ключа нет — ищем на два уровня вверх.
     private var repoRoot: String {
@@ -26,19 +49,25 @@ final class Runner: ObservableObject {
             .deletingLastPathComponent().path
     }
 
-    func run(book: String) {
+    var python: String {
+        (Bundle.main.object(forInfoDictionaryKey: "ThoriumPython") as? String)
+            ?? UserDefaults.standard.string(forKey: "python")
+            ?? "/usr/bin/python3"
+    }
+
+    func run(book: String, language: String, voice: String, speed: Double) {
         guard !running else { return }
         running = true; done = 0; total = 0; result = nil
         log = ""; stage = "Разбор книги…"
 
         let root = repoRoot
-        let py = (Bundle.main.object(forInfoDictionaryKey: "ThoriumPython") as? String)
-            ?? UserDefaults.standard.string(forKey: "python")
-            ?? "/usr/bin/python3"
-
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: py)
-        p.arguments = [root + "/src/book.py", book]
+        p.executableURL = URL(fileURLWithPath: python)
+        var argv = [root + "/src/book.py", book]
+        if language != "auto" { argv += ["--language", language] }
+        if !voice.isEmpty { argv += ["--voice", voice] }
+        if abs(speed - 1.0) > 0.001 { argv += ["--speed", String(format: "%.2f", speed)] }
+        p.arguments = argv
         p.currentDirectoryURL = URL(fileURLWithPath: root)
 
         let pipe = Pipe()
@@ -92,6 +121,7 @@ final class Runner: ObservableObject {
 
 struct DropZone: View {
     @ObservedObject var runner: Runner
+    let onPick: (String) -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -114,7 +144,7 @@ struct DropZone: View {
             guard let p = providers.first else { return false }
             _ = p.loadObject(ofClass: URL.self) { url, _ in
                 guard let url, url.pathExtension.lowercased() == "epub" else { return }
-                DispatchQueue.main.async { runner.run(book: url.path) }
+                DispatchQueue.main.async { onPick(url.path) }
             }
             return true
         }
@@ -125,13 +155,60 @@ struct DropZone: View {
         panel.allowedContentTypes = [UTType(filenameExtension: "epub") ?? .data]
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            runner.run(book: url.path)
+            onPick(url.path)
         }
     }
 }
 
 struct ContentView: View {
     @StateObject private var runner = Runner()
+    @AppStorage("language") private var language = "auto"
+    @AppStorage("voice") private var voice = ""
+    @AppStorage("speed") private var speed = 1.0
+
+    private var voiceGroups: [(String, [String])] {
+        [("Клонирование по образцу", runner.voices), ("Готовые голоса", runner.presets)]
+    }
+
+    private func start(_ path: String) {
+        runner.run(book: path, language: language, voice: voice, speed: speed)
+    }
+
+    private var settings: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+            GridRow {
+                Text("Язык")
+                Picker("", selection: $language) {
+                    Text("Определить по книге").tag("auto")
+                    Text("Русский").tag("ru")
+                    Text("English").tag("en")
+                }.labelsHidden()
+            }
+            GridRow {
+                Text("Голос")
+                Picker("", selection: $voice) {
+                    Text("По языку книги").tag("")
+                    ForEach(voiceGroups, id: \.0) { group in
+                        if !group.1.isEmpty {
+                            Section(group.0) {
+                                ForEach(group.1, id: \.self) { Text($0).tag($0) }
+                            }
+                        }
+                    }
+                }.labelsHidden()
+            }
+            GridRow {
+                Text("Темп")
+                HStack {
+                    Slider(value: $speed, in: 0.7...1.6, step: 0.05)
+                    Text(String(format: "%.2f×", speed))
+                        .font(.callout.monospacedDigit())
+                        .frame(width: 52, alignment: .trailing)
+                }
+            }
+        }
+        .disabled(runner.running)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -140,7 +217,8 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.secondary)
 
             if !runner.running && runner.result == nil {
-                DropZone(runner: runner)
+                DropZone(runner: runner, onPick: start)
+                DisclosureGroup("Настройки") { settings.padding(.top, 6) }
             }
 
             Text(runner.stage).font(.callout)
@@ -186,6 +264,7 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(width: 520)
+        .task { runner.loadVoices() }
     }
 }
 
