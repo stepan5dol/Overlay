@@ -135,7 +135,7 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Thorium").font(.title2).bold()
+            Text("Overlay").font(.title2).bold()
             Text("Книга → EPUB с синхронной озвучкой")
                 .font(.caption).foregroundStyle(.secondary)
 
@@ -190,9 +190,9 @@ struct ContentView: View {
 }
 
 @main
-struct ThoriumApp: App {
+struct OverlayApp: App {
     var body: some Scene {
-        Window("Thorium", id: "main") { ContentView() }
+        Window("Overlay", id: "main") { ContentView() }
             .windowResizability(.contentSize)
     }
 }

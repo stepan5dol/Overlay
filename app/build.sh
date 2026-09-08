@@ -3,23 +3,23 @@
 # поэтому бандл должен лежать внутри репозитория (он ищет корень на два уровня вверх).
 set -e
 cd "$(dirname "$0")"
-APP="Thorium.app"
+APP="Overlay.app"
 REPO="$(cd .. && pwd)"
 PYTHON="${THORIUM_PYTHON:-/Users/stepandolzhenko/qwen3-tts-apple-silicon/.venv/bin/python}"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-swiftc -O -parse-as-library Thorium.swift -o "$APP/Contents/MacOS/Thorium" \
+swiftc -O -parse-as-library Overlay.swift -o "$APP/Contents/MacOS/Overlay" \
        -target arm64-apple-macos14.0
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>Thorium</string>
-  <key>CFBundleDisplayName</key><string>Thorium</string>
-  <key>CFBundleIdentifier</key><string>local.thorium.overlay</string>
-  <key>CFBundleExecutable</key><string>Thorium</string>
+  <key>CFBundleName</key><string>Overlay</string>
+  <key>CFBundleDisplayName</key><string>Overlay</string>
+  <key>CFBundleIdentifier</key><string>local.overlay.maker</string>
+  <key>CFBundleExecutable</key><string>Overlay</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
