@@ -15,7 +15,7 @@ REFS = os.path.join(ROOT, "refs")
 
 REFERENCE = {                       # язык -> голос по умолчанию, пара wav/txt в refs/
     "ru": "vakhshtayn",
-    "en": "en_female_ljspeech",
+    "en": "linda_johnson",
 }
 # Пресеты озвучиваются моделью CustomVoice: ей референс не нужен, но и
 # клонировать она не умеет -- это другой путь генерации.
