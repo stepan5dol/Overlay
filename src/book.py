@@ -227,12 +227,36 @@ def main():
             sys.exit(f"нет такого голоса: {name}\n"
                      f"доступные: {available_voices()}")
 
-    work = args.out or os.path.join(ROOT, "out", slug(book))
+    # В имя рабочей папки входит голос и темп: фрагменты кэшируются, и без
+    # этого прогон другим голосом молча подхватил бы чужую озвучку.
+    voice_tag = re.sub(r"[^\w.-]+", "_",
+                       (args.voice or REFERENCE[lang]).replace(":", "-"))
+    if abs(args.speed - 1.0) > 1e-3:
+        voice_tag += f"@{args.speed:g}"
+    work = args.out or os.path.join(ROOT, "out", f"{slug(book)}__{voice_tag}")
     dest = args.dest or os.path.expanduser("~/Documents")
     os.makedirs(dest, exist_ok=True)
-    final = args.epub_out or os.path.join(dest, slug(book) + "_overlay.epub")
-    m4b = os.path.join(dest, slug(book) + ".m4b")
+    stem = f"{slug(book)}__{voice_tag}"
+    final = args.epub_out or os.path.join(dest, stem + "_overlay.epub")
+    m4b = os.path.join(dest, stem + ".m4b")
     os.makedirs(work, exist_ok=True)
+    stamp_path = os.path.join(work, "voice.json")
+    stamp = {"голос": args.voice or REFERENCE[lang], "язык": lang,
+             "темп": args.speed}
+    if os.path.exists(stamp_path):
+        old = json.load(open(stamp_path, encoding="utf-8"))
+        if old != stamp:
+            import shutil
+            print(f"озвучено другим голосом ({old.get('голос')}), "
+                  f"переозвучиваю", flush=True)
+            shutil.rmtree(os.path.join(work, "parts"), ignore_errors=True)
+            for f in ("words.json", "chapters.json"):
+                try:
+                    os.remove(os.path.join(work, f))
+                except FileNotFoundError:
+                    pass
+    json.dump(stamp, open(stamp_path, "w", encoding="utf-8"),
+              ensure_ascii=False, indent=1)
 
     model = args.model or (CUSTOM_VOICE_MODEL if preset else None)
     print(f"книга:    {os.path.basename(book)}")
