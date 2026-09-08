@@ -1,6 +1,10 @@
 out/
+app/Thorium.app/
+app/AppIcon.iconset/
 *.wav
 *.m4b
 *.mp4
+*.epub
+!refs/*.wav
 __pycache__/
 .venv/
