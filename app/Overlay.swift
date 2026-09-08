@@ -35,6 +35,7 @@ final class Runner: ObservableObject {
     @Published var presets: [String] = []
     /// Системные голоса: (значение для --voice, что показать человеку)
     @Published var system: [(String, String)] = []
+    @Published var fast: [(String, String)] = []
 
     /// Список голосов берётся у самого конвейера, чтобы не расходился с refs/.
     func loadVoices() {
@@ -53,12 +54,14 @@ final class Runner: ObservableObject {
                 $0.trimmingCharacters(in: .whitespaces) }
             if line.hasPrefix("референсы") { voices = names }
             if line.hasPrefix("пресеты") { presets = names }
-            if line.hasPrefix("система") {
-                system = names.map { n in
+            let pairs: ([String]) -> [(String, String)] = { ns in
+                ns.map { n in
                     let p = n.split(separator: "|", maxSplits: 1)
                     return (String(p[0]), p.count > 1 ? String(p[1]) : String(p[0]))
                 }
             }
+            if line.hasPrefix("система") { system = pairs(names) }
+            if line.hasPrefix("быстрые") { fast = pairs(names) }
         }
     }
 
@@ -307,6 +310,13 @@ struct ContentView: View {
                         if !runner.presets.isEmpty {
                             Section("Готовые голоса") {
                                 ForEach(runner.presets, id: \.self) { Text($0).tag($0) }
+                            }
+                        }
+                        if !runner.fast.isEmpty {
+                            Section("Быстрые — Kokoro") {
+                                ForEach(runner.fast, id: \.0) { v in
+                                    Text(v.1).tag(v.0)
+                                }
                             }
                         }
                         if !runner.system.isEmpty {
