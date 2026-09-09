@@ -147,22 +147,32 @@ def ensure_patch(python):
     return "применена сейчас"
 
 
-def run_stage(cmd, name):
-    """Запуск шага в своей группе процессов.
+def own_process_group():
+    """Прогон живёт в своей группе процессов.
 
-    Своя группа нужна, чтобы прогон не зависел от того, кто его начал:
-    гибель родителя не уносит с собой синтез, а остановка одного прогона
-    не задевает соседние. Сигнал остановки передаётся всей группе, то есть
-    и рабочим процессам пула тоже.
+    Группу открывает сам прогон, а его шаги остаются внутри неё. Тогда
+    сигнал по группе гасит всю цепочку -- посредника, синтез и рабочих, --
+    а соседние прогоны, у которых группы свои, этого не замечают.
     """
-    proc = subprocess.Popen(cmd, start_new_session=True)
+    try:
+        os.setpgrp()
+    except OSError:
+        pass
+
+
+def run_stage(cmd, name):
+    """Запуск шага в той же группе процессов, что и сам прогон.
+
+    Группу открывает окно -- один раз на прогон. Тогда кнопка «Остановить»
+    гасит всю цепочку целиком, а соседние прогоны, живущие в своих группах,
+    этого не замечают. Отдельная группа на каждый шаг делала синтез
+    неубиваемым: посредник умирал, а он оставался сиротой.
+    """
+    proc = subprocess.Popen(cmd)
     try:
         code = proc.wait()
     except KeyboardInterrupt:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        proc.terminate()
         proc.wait()
         sys.exit(f"{name}: остановлено")
     if code != 0:
@@ -203,6 +213,7 @@ def main():
 
     if not args.book:
         ap.error("не указана книга")
+    own_process_group()
     book = os.path.abspath(args.book)
     if not os.path.exists(book):
         sys.exit(f"нет такого файла: {book}")
