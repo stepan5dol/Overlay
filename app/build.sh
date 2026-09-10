@@ -7,7 +7,10 @@ APP="Overlay.app"
 REPO="$(cd .. && pwd)"
 # Интерпретатор для конвейера. По умолчанию -- окружение движка, которое
 # приложение создаёт само; переопределяется через THORIUM_PYTHON.
-PYTHON="${THORIUM_PYTHON:-$HOME/Library/Application Support/Overlay/engines/qwen/bin/python3}"
+# Интерпретатор указывает внутрь бандла; при разработке переопределяется
+# через THORIUM_PYTHON.
+# Служебный интерпретатор приложения -- на нём же ставятся движки.
+PYTHON="${THORIUM_PYTHON:-@BUNDLE@/python/3.13/bin/python3}"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -29,6 +32,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>ThoriumRepoRoot</key><string>$REPO</string>
   <key>ThoriumPython</key><string>$PYTHON</string>
+  <key>ThoriumBundled</key><true/>
   <key>CFBundleDocumentTypes</key><array><dict>
     <key>CFBundleTypeName</key><string>EPUB</string>
     <key>CFBundleTypeRole</key><string>Viewer</string>
@@ -38,6 +42,23 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 [ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/"
+
+# Конвейер кладём внутрь приложения: снаружи он есть только на машине
+# разработчика, а бандл должен работать у всех.
+# Интерпретаторы внутри приложения: у каждого движка своя версия, а в macOS
+# есть только 3.9. Скачиваются через ./fetch_python.sh.
+if [ -d python ] && [ -n "$(ls -A python 2>/dev/null)" ]; then
+  rsync -a --exclude "__pycache__" python/ "$APP/Contents/Resources/python/"
+  echo "  интерпретаторы: $(ls python | tr '\n' ' ')"
+else
+  echo "  ВНИМАНИЕ: нет интерпретаторов, выполните ./fetch_python.sh" >&2
+fi
+
+mkdir -p "$APP/Contents/Resources/src" "$APP/Contents/Resources/refs"
+rsync -a --exclude "__pycache__" ../src/ "$APP/Contents/Resources/src/"
+rsync -a --exclude "vakhshtayn.*" ../refs/ "$APP/Contents/Resources/refs/"
+cp ../README.md ../LICENSE "$APP/Contents/Resources/" 2>/dev/null || true
+[ -f appletts ] && cp appletts "$APP/Contents/Resources/"
 codesign --force --deep -s - "$APP" 2>/dev/null || true
 # Ставим сразу: собранное, но не установленное приложение -- источник
 # путаницы, окно продолжает работать по старой версии.

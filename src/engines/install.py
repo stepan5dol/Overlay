@@ -25,25 +25,32 @@ def say(kind, text):
 
 
 def bundled_python(engine):
-    """Интерпретатор для окружения движка.
+    """Интерпретатор, из которого создаётся окружение движка.
 
-    Движок может требовать свою версию Python: misaki, нужный Kokoro,
-    объявляет requires_python <3.13. Ищем запрошенную версию сначала среди
-    вложенных в приложение, потом в системе.
+    Версия задана в описании движка: Kokoro не ставится выше 3.12, прочие
+    проверены на 3.13. Интерпретаторы едут внутри приложения -- в macOS
+    есть только 3.9, а homebrew или conda у человека может не быть.
     """
     want = ENGINES[engine].get("python")
-    if want:
-        inside = os.path.join(ROOT, "Resources", "python", want, "bin", "python3")
-        if os.path.exists(inside):
-            return inside
-        from shutil import which
-        found = which(f"python{want}")
-        if found:
-            return found
-        say("ОШИБКА", f"нужен Python {want}, его нет в системе")
-        sys.exit(1)
-    inside = os.path.join(ROOT, "Resources", "python", "bin", "python3")
-    return inside if os.path.exists(inside) else sys.executable
+    if not want:
+        return sys.executable
+
+    свой = os.path.join(ROOT, "python", want, "bin", "python3")
+    if os.path.exists(свой):
+        return свой
+
+    # при разработке -- рядом с репозиторием
+    рядом = os.path.join(ROOT, "app", "python", want, "bin", "python3")
+    if os.path.exists(рядом):
+        return рядом
+
+    from shutil import which
+    системный = which(f"python{want}")
+    if системный:
+        return системный
+
+    say("ОШИБКА", f"нет интерпретатора Python {want} для движка {engine}")
+    sys.exit(1)
 
 
 def make_env(engine):

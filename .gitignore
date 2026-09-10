@@ -21,3 +21,8 @@ docs/release-plan.md
 
 # Собранный бинарник помощника: пересобирается через app/build.sh
 app/appletts
+
+# Интерпретаторы качаются через app/fetch_python.sh
+app/python/
+# Собранные образы
+*.dmg

@@ -76,6 +76,12 @@ final class Runner: ObservableObject {
     // Путь к репозиторию прописывается при сборке, чтобы бандл можно было
     // положить в /Applications. Если ключа нет — ищем на два уровня вверх.
     private var repoRoot: String {
+        // Сперва конвейер внутри приложения -- так работает у всех.
+        let внутри = Bundle.main.resourcePath ?? ""
+        if FileManager.default.fileExists(atPath: внутри + "/src/book.py") {
+            return внутри
+        }
+        // Иначе рядом с бандлом: это сборка из репозитория при разработке.
         if let p = Bundle.main.object(forInfoDictionaryKey: "ThoriumRepoRoot") as? String,
            FileManager.default.fileExists(atPath: p + "/src/book.py") {
             return p
@@ -84,10 +90,20 @@ final class Runner: ObservableObject {
             .deletingLastPathComponent().path
     }
 
+    /// Интерпретатор для конвейера. До установки первого движка своего
+    /// окружения ещё нет, поэтому берём системный: разбор книги и выбор
+    /// голоса обходятся стандартной библиотекой.
     var python: String {
-        (Bundle.main.object(forInfoDictionaryKey: "ThoriumPython") as? String)
-            ?? UserDefaults.standard.string(forKey: "python")
-            ?? "/usr/bin/python3"
+        if var p = Bundle.main.object(forInfoDictionaryKey: "ThoriumPython") as? String {
+            p = p.replacingOccurrences(of: "@BUNDLE@",
+                                       with: Bundle.main.resourcePath ?? "")
+            if FileManager.default.isExecutableFile(atPath: p) { return p }
+        }
+        if let p = UserDefaults.standard.string(forKey: "python"),
+           FileManager.default.isExecutableFile(atPath: p) {
+            return p
+        }
+        return "/usr/bin/python3"
     }
 
     func run(book: String, language: String, voice: String, speed: Double,

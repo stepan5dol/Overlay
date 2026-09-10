@@ -24,13 +24,24 @@ final class Хозяйство: ObservableObject {
     @Published var шаг: String = ""
 
     var repoRoot: String {
-        (Bundle.main.object(forInfoDictionaryKey: "ThoriumRepoRoot") as? String)
+        let внутри = Bundle.main.resourcePath ?? ""
+        if FileManager.default.fileExists(atPath: внутри + "/src/engines/status.py") {
+            return внутри
+        }
+        return (Bundle.main.object(forInfoDictionaryKey: "ThoriumRepoRoot") as? String)
             ?? Bundle.main.bundleURL.deletingLastPathComponent()
                 .deletingLastPathComponent().path
     }
+    /// Интерпретатор для служебных задач: список голосов, установка
+    /// движков. До установки первого движка своего окружения ещё нет,
+    /// поэтому берём системный -- ему хватает стандартной библиотеки.
     var python: String {
-        (Bundle.main.object(forInfoDictionaryKey: "ThoriumPython") as? String)
-            ?? "/usr/bin/python3"
+        if var p = Bundle.main.object(forInfoDictionaryKey: "ThoriumPython") as? String {
+            p = p.replacingOccurrences(of: "@BUNDLE@",
+                                       with: Bundle.main.resourcePath ?? "")
+            if FileManager.default.isExecutableFile(atPath: p) { return p }
+        }
+        return "/usr/bin/python3"
     }
 
     func обновить() {
