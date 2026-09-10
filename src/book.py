@@ -433,9 +433,9 @@ def main():
 
     if args.format in ("epub", "both"):
         print("ЭТАП сборка книги с подсветкой", flush=True)
-        # mo2 добавляет озвучку в исходную книгу, сохраняя вёрстку,
-        # картинки и стили; mo строил EPUB с нуля и терял их.
-        mo = [args.python, os.path.join(HERE, "mo2.py"), "--out", work,
+        # Озвучка добавляется в исходную книгу: вёрстка, картинки и стили
+        # остаются на месте.
+        mo = [args.python, os.path.join(HERE, "mo.py"), "--out", work,
               "--source", book, "--epub", final, "--speed", str(args.speed)]
         run_stage(mo, "сборка EPUB")
         commands.append(" ".join(mo))

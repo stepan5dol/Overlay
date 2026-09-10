@@ -64,12 +64,16 @@ EPUB → EPUB 3 с media overlay: синхронная озвучка, подс�
 
 ## Устройство
 
-    app/Overlay.swift   окно, ход работы, результат
-    app/build.sh        сборка бандла, пути прописываются внутрь
-    src/book.py         единственный вход: книга -> overlay
-    src/narrate.py      извлечение текста, нарезка, синтез по фрагментам
-    src/mo.py           фрагменты + аудио -> EPUB 3 с media overlay
-    src/assemble.py     фрагменты -> главы -> M4B (обычная аудиокнига)
-    src/extract.py      извлечение главы из PDF (часть 2, не подключено)
-    refs/               эталонные голоса: ru_female, en_female_ljspeech
-    patches/            правка mlx-audio, включающая ICL
+    app/Overlay.swift    окно, ход работы, результат
+    app/Settings.swift   настройки: движки, размер пакета, папка
+    app/AppleTTS.swift   системный синтез с пословными таймингами
+    app/build.sh         сборка и установка приложения
+    src/book.py          единственный вход: книга -> книга с озвучкой
+    src/narrate.py       извлечение текста, нарезка, синтез
+    src/mo.py            озвучка вставляется в исходный EPUB
+    src/assemble.py      фрагменты -> главы -> M4B
+    src/state.py         состояние прогона, продолжение после обрыва
+    src/tools.py         поиск ffmpeg вне PATH
+    src/cut_chapter.py   одна глава отдельной книгой -- для проверок
+    src/engines/         движки синтеза и разборщики PDF
+    refs/                образцы голоса с расшифровками
