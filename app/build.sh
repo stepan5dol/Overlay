@@ -43,7 +43,9 @@ if [ "${THORIUM_NO_INSTALL:-}" != "1" ]; then
   pkill -x Overlay 2>/dev/null || true
   sleep 1
   rm -rf "/Applications/$APP"
-  cp -R "$APP" /Applications/
+  mv "$APP" /Applications/
   echo "установлено: /Applications/$APP"
 fi
-echo "собрано: $(pwd)/$APP"
+# Бандл перемещается, а не копируется: копия в репозитории давала второе
+# приложение с тем же именем в поиске Spotlight.
+echo "готово"

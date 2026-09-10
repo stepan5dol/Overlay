@@ -17,6 +17,7 @@ final class Runner: ObservableObject {
     @Published var chapters: Int = 0
     @Published var assembling = false
     @Published var stats: [String: Double] = [:]
+    @Published var resumed = false
     @Published var startedAt: Date? = nil
 
     /// Оценка по уже сделанному: сколько ушло на n фрагментов, столько же
@@ -30,6 +31,8 @@ final class Runner: ObservableObject {
     }
 
     private var task: Process?
+    private var stopped = false
+    private var lastStage = "синтез"
 
     @Published var voices: [String] = []
     @Published var presets: [String] = []
@@ -85,9 +88,10 @@ final class Runner: ObservableObject {
     func run(book: String, language: String, voice: String, speed: Double,
              format: String, dest: String) {
         guard !running else { return }
+        stopped = false
         running = true; done = 0; total = 0; result = nil; results = []
         chapter = 0; chapters = 0; startedAt = Date()
-        assembling = false; stats = [:]
+        assembling = false; stats = [:]; resumed = false
         log = ""; stage = "Разбор книги…"
 
         let root = repoRoot
@@ -112,8 +116,15 @@ final class Runner: ObservableObject {
         }
         p.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
-                self?.running = false
-                self?.stage = proc.terminationStatus == 0 ? "Готово" : "Прервано"
+                guard let self else { return }
+                self.running = false
+                if proc.terminationStatus == 0 && !self.results.isEmpty {
+                    self.stage = "Готово"
+                } else if self.stopped {
+                    self.stage = "Остановлено. Работа сохранена — перетащите книгу снова, чтобы продолжить"
+                } else {
+                    self.stage = "Прервалось на этапе «\(self.lastStage)». Работа сохранена — перетащите книгу снова"
+                }
             }
         }
         task = p
@@ -128,6 +139,7 @@ final class Runner: ObservableObject {
         guard let p = task, p.isRunning else { running = false; return }
         let gid = getpgid(p.processIdentifier)
         if gid > 0 { killpg(gid, SIGTERM) } else { p.terminate() }
+        stopped = true
         running = false
         stage = "Остановлено"
     }
@@ -148,10 +160,12 @@ final class Runner: ObservableObject {
                         : "Фрагмент \(d) из \(t)"
                 }
             }
+            if line.hasPrefix("ПРОДОЛЖАЮ ") { resumed = true }
             if line.hasPrefix("ЭТАП ") {
                 assembling = true
                 let t = String(line.dropFirst(5))
                 stage = t.prefix(1).uppercased() + t.dropFirst()
+                lastStage = t
             }
             if line.hasPrefix("СТАТИСТИКА ") {
                 let json = String(line.dropFirst("СТАТИСТИКА ".count))
@@ -417,6 +431,14 @@ struct ContentView: View {
                     ProgressView(value: Double(runner.done),
                                  total: Double(max(runner.total, 1)))
                         .progressViewStyle(.linear)
+                }
+                if runner.resumed {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(.secondary)
+                        Text("Продолжаю прерванную работу — озвученное не переделывается")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if runner.chapters > 1 && !runner.assembling {
                     HStack(spacing: 6) {

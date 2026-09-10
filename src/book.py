@@ -10,6 +10,8 @@ mlx-audio применяется сама. Никаких обязательны
 import argparse, json, os, re, signal, subprocess, sys, unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import state as st
 ROOT = os.path.dirname(HERE)
 REFS = os.path.join(ROOT, "refs")
 
@@ -179,6 +181,20 @@ def run_stage(cmd, name):
         sys.exit(f"{name}: завершилось с ошибкой ({code})")
 
 
+def каталог_фрагментов(work):
+    return os.path.join(work, "parts")
+
+
+def sha_of(path, limit=1 << 20):
+    """Короткий отпечаток книги: чтобы правка исходника не смешалась
+    со старой озвучкой."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        h.update(f.read(limit))
+    return h.hexdigest()[:16]
+
+
 def slug(path):
     name = os.path.splitext(os.path.basename(path))[0]
     name = re.sub(r"\s*\([^)]*\)", "", name)
@@ -251,23 +267,20 @@ def main():
     final = args.epub_out or os.path.join(dest, stem + "_overlay.epub")
     m4b = os.path.join(dest, stem + ".m4b")
     os.makedirs(work, exist_ok=True)
-    stamp_path = os.path.join(work, "voice.json")
-    stamp = {"голос": args.voice or REFERENCE[lang], "язык": lang,
-             "темп": args.speed}
-    if os.path.exists(stamp_path):
-        old = json.load(open(stamp_path, encoding="utf-8"))
-        if old != stamp:
-            import shutil
-            print(f"озвучено другим голосом ({old.get('голос')}), "
-                  f"переозвучиваю", flush=True)
-            shutil.rmtree(os.path.join(work, "parts"), ignore_errors=True)
-            for f in ("words.json", "chapters.json"):
-                try:
-                    os.remove(os.path.join(work, f))
-                except FileNotFoundError:
-                    pass
-    json.dump(stamp, open(stamp_path, "w", encoding="utf-8"),
-              ensure_ascii=False, indent=1)
+    отпечаток = {"голос": args.voice or REFERENCE[lang], "язык": lang,
+                 "темп": args.speed, "книга": sha_of(book)}
+    прежний = st.load(work)
+    if прежний and прежний.get("отпечаток") != отпечаток:
+        import shutil
+        print(f"прежняя работа не подходит ({прежний.get('отпечаток', {}).get('голос')}), "
+              f"начинаю заново", flush=True)
+        shutil.rmtree(work, ignore_errors=True)
+        os.makedirs(work, exist_ok=True)
+    elif прежний and not прежний.get("завершён"):
+        сделано = прежний.get("фрагментов_готово", 0)
+        print(f"ПРОДОЛЖАЮ прерванный прогон: этап «{прежний.get('этап')}»"
+              + (f", фрагментов готово {сделано}" if сделано else ""), flush=True)
+    st.save(work, отпечаток=отпечаток, завершён=False, этап="извлечение")
 
     model = args.model or (CUSTOM_VOICE_MODEL if preset else None)
     print(f"книга:    {os.path.basename(book)}")
@@ -318,7 +331,11 @@ def main():
         narrate += ["--only", str(args.only)]
     if args.limit_chunks:
         narrate += ["--limit-chunks", str(args.limit_chunks)]
+    st.save(work, этап="синтез")
     run_stage(narrate, "синтез")
+    st.save(work, этап="сборка",
+            фрагментов_готово=len([n for n in os.listdir(каталог_фрагментов(work))
+                                   if n.endswith(".wav")]))
     print("ЭТАП сборка", flush=True)
 
     title = os.path.splitext(os.path.basename(book))[0][:70]
@@ -371,6 +388,7 @@ def main():
         print(f"статистика неполна: {e}", file=sys.stderr)
     if stats:
         print("СТАТИСТИКА " + json.dumps(stats, ensure_ascii=False), flush=True)
+    st.save(work, этап="готово", завершён=True, результат=produced)
     for f in produced:
         print(f"готово: {f}")
 
