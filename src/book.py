@@ -170,15 +170,39 @@ def run_stage(cmd, name):
     этого не замечают. Отдельная группа на каждый шаг делала синтез
     неубиваемым: посредник умирал, а он оставался сиротой.
     """
-    proc = subprocess.Popen(cmd)
+    proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)
+    хвост = []
+    import threading
+
+    def слушать():
+        for line in proc.stderr:
+            хвост.append(line)
+            del хвост[:-40]
+            sys.stderr.write(line)
+    t = threading.Thread(target=слушать, daemon=True)
+    t.start()
     try:
         code = proc.wait()
+        t.join(timeout=2)
     except KeyboardInterrupt:
         proc.terminate()
         proc.wait()
         sys.exit(f"{name}: остановлено")
     if code != 0:
-        sys.exit(f"{name}: завершилось с ошибкой ({code})")
+        # Внятная строка для окна: без неё человек видит только «прервалось»
+        # и идёт читать журнал.
+        причина = ""
+        for line in reversed(хвост):
+            line = line.strip()
+            if line.startswith(("RuntimeError:", "FileNotFoundError:",
+                                "ValueError:", "OSError:")):
+                причина = line.split(":", 1)[1].strip()
+                break
+            if line.startswith("не найден") or line.startswith("не удалось"):
+                причина = line
+                break
+        print(f"СБОЙ {name}: {причина or f'код {code}'}", flush=True)
+        sys.exit(1)
 
 
 def каталог_фрагментов(work):
@@ -220,6 +244,8 @@ def main():
     ap.add_argument("--format", default="epub", choices=("epub", "m4b", "both"),
                     help="epub с подсветкой, аудиокнига m4b, или оба")
     ap.add_argument("--dest", help="куда положить результат")
+    ap.add_argument("--keep-work", action="store_true",
+                    help="не удалять промежуточные файлы после сборки")
     args = ap.parse_args()
 
     if args.list_voices:
@@ -389,6 +415,14 @@ def main():
     if stats:
         print("СТАТИСТИКА " + json.dumps(stats, ensure_ascii=False), flush=True)
     st.save(work, этап="готово", завершён=True, результат=produced)
+
+    # Промежуточные файлы после успеха не нужны: фрагменты книги весят
+    # столько же, сколько сама книга, и копятся с каждым прогоном. Каталог
+    # сносится целиком -- незаконченная работа сюда не попадает, у неё
+    # завершён=False, и она доживает до следующего запуска.
+    if produced and not args.keep_work:
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
     for f in produced:
         print(f"готово: {f}")
 

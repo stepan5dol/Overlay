@@ -33,6 +33,7 @@ final class Runner: ObservableObject {
     private var task: Process?
     private var stopped = false
     private var lastStage = "синтез"
+    @Published var failure: String? = nil
 
     @Published var voices: [String] = []
     @Published var presets: [String] = []
@@ -88,7 +89,7 @@ final class Runner: ObservableObject {
     func run(book: String, language: String, voice: String, speed: Double,
              format: String, dest: String) {
         guard !running else { return }
-        stopped = false
+        stopped = false; failure = nil
         running = true; done = 0; total = 0; result = nil; results = []
         chapter = 0; chapters = 0; startedAt = Date()
         assembling = false; stats = [:]; resumed = false
@@ -122,6 +123,8 @@ final class Runner: ObservableObject {
                     self.stage = "Готово"
                 } else if self.stopped {
                     self.stage = "Остановлено. Работа сохранена — перетащите книгу снова, чтобы продолжить"
+                } else if let f = self.failure {
+                    self.stage = f
                 } else {
                     self.stage = "Прервалось на этапе «\(self.lastStage)». Работа сохранена — перетащите книгу снова"
                 }
@@ -161,6 +164,7 @@ final class Runner: ObservableObject {
                 }
             }
             if line.hasPrefix("ПРОДОЛЖАЮ ") { resumed = true }
+            if line.hasPrefix("СБОЙ ") { failure = String(line.dropFirst(5)) }
             if line.hasPrefix("ЭТАП ") {
                 assembling = true
                 let t = String(line.dropFirst(5))
@@ -460,7 +464,10 @@ struct ContentView: View {
         var parts: [String] = []
         if let sec = s["секунды"], sec > 0 {
             let h = Int(sec) / 3600, m = (Int(sec) % 3600) / 60
-            parts.append(h > 0 ? "\(h) ч \(m) мин" : "\(m) мин")
+            let ss = Int(sec) % 60
+            if h > 0 { parts.append("\(h) ч \(m) мин") }
+            else if m > 0 { parts.append("\(m) мин \(ss) с") }
+            else { parts.append("\(ss) с") }
         }
         if let w = s["слова"], w > 0 {
             parts.append("\(Int(w)) слов")

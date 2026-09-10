@@ -5,7 +5,10 @@ duration is known and no forced alignment is involved. Each chunk becomes one
 <span id>, and the SMIL points at it with clipBegin/clipEnd into the chapter's
 concatenated audio.
 """
-import argparse, json, os, subprocess, zipfile, html, uuid
+import argparse, json, os, subprocess, sys, zipfile, html, uuid
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tools import ffmpeg as найти_ffmpeg
 import numpy as np, soundfile as sf
 
 SR = 24000
@@ -107,7 +110,7 @@ def atempo_chain(speed):
 
 def retime(src, dst, speed):
     """Меняет темп, не трогая высоту голоса."""
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src,
+    subprocess.run([найти_ffmpeg(), "-y", "-v", "error", "-i", src,
                     "-filter:a", atempo_chain(speed), dst], check=True)
 
 
@@ -136,7 +139,7 @@ def build(out_dir, epub_path, title, lang, speed=1.0):
                     s_["begin"] /= speed
                     s_["end"] /= speed
         mp3 = os.path.join(staging, f"ch{ci}.mp4")
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", ap,
+        subprocess.run([найти_ffmpeg(), "-y", "-v", "error", "-i", ap,
                         "-c:a", "aac", "-b:a", "96k", mp3], check=True)
         os.remove(ap)
 

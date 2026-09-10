@@ -4,7 +4,10 @@ Chunks are joined with a short pause whose length follows the punctuation
 that ended the chunk, and the joint is cross-faded over a few milliseconds
 so the seam does not click.
 """
-import argparse, json, os, subprocess
+import argparse, json, os, subprocess, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from tools import ffmpeg as найти_ffmpeg
 import numpy as np, soundfile as sf
 
 SR = 24000
@@ -80,7 +83,7 @@ def main():
         t += d
     open(meta, "w").write("\n".join(lines))
     dst = os.path.join(args.out, "audiobook.m4b")
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+    subprocess.run([найти_ffmpeg(), "-y", "-v", "error", "-f", "concat", "-safe", "0",
                     "-i", lst, "-i", meta, "-map_metadata", "1",
                     "-c:a", "aac", "-b:a", "128k", "-vn", dst], check=True)
     print(f"\n{dst}  ({t/3600000:.2f} ч)")
