@@ -32,6 +32,18 @@ def нормализовать(t):
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", t)).strip()
 
 
+СЛУЖЕБНЫЕ = ("title", "head", "style", "script")
+
+
+def тело(xhtml):
+    """Границы <body>: размечать что-либо вне его нельзя."""
+    m = re.search(r"<body\b[^>]*>", xhtml)
+    if not m:
+        return 0, len(xhtml)
+    конец = xhtml.rfind("</body>")
+    return m.end(), (конец if конец > 0 else len(xhtml))
+
+
 def текстовые_узлы(xhtml):
     """Куски текста вне тегов: (начало, конец, текст).
 
@@ -39,13 +51,24 @@ def текстовые_узлы(xhtml):
     атрибут. Поэтому сначала выделяем текстовые узлы, а поиск ведём по
     склеенному из них тексту, помня, откуда каждый символ взялся.
     """
-    узлы, поз = [], 0
+    начало, конец = тело(xhtml)
+    узлы, поз, пропуск = [], начало, 0
     for m in re.finditer(r"<[^>]+>", xhtml):
-        if m.start() > поз:
+        if m.end() <= начало:
+            continue
+        if m.start() >= конец:
+            break
+        имя = re.match(r"</?\s*([A-Za-z0-9]+)", m.group(0))
+        имя = имя.group(1).lower() if имя else ""
+        if m.start() > поз and not пропуск:
             узлы.append((поз, m.start(), xhtml[поз:m.start()]))
+        if имя in СЛУЖЕБНЫЕ:
+            пропуск += 0 if m.group(0).startswith("</") else 1
+            if m.group(0).startswith("</"):
+                пропуск = max(0, пропуск - 1)
         поз = m.end()
-    if поз < len(xhtml):
-        узлы.append((поз, len(xhtml), xhtml[поз:]))
+    if поз < конец and not пропуск:
+        узлы.append((поз, конец, xhtml[поз:конец]))
     return узлы
 
 
@@ -60,44 +83,70 @@ def карта_текста(узлы):
 
 
 def разметить(xhtml, фрагменты, префикс):
-    """Обернуть каждый фрагмент в <span id>, не трогая остальную разметку."""
-    плоский, места = карта_текста(текстовые_узлы(xhtml))
+    """Обернуть каждый фрагмент в <span id>, не трогая остальную разметку.
+
+    Фрагмент может лежать в нескольких элементах сразу (заголовок и первое
+    предложение, абзац с курсивом). Оборачивать его одним span нельзя --
+    теги пересекутся и XML сломается. Поэтому фрагмент режется по границам
+    текстовых узлов, и каждый кусок получает свой span с общим id-корнем;
+    SMIL ссылается на первый.
+    """
+    узлы = текстовые_узлы(xhtml)
+    плоский, места = карта_текста(узлы)
+
     сжатый, индексы = [], []
-    предыдущий_пробел = False
+    пробел = False
     for i, ch in enumerate(плоский):
         if ch.isspace():
-            if not предыдущий_пробел and сжатый:
+            if not пробел and сжатый:
                 сжатый.append(" "); индексы.append(i)
-            предыдущий_пробел = True
+            пробел = True
         else:
             сжатый.append(ch); индексы.append(i)
-            предыдущий_пробел = False
+            пробел = False
     сжатый = "".join(сжатый)
 
-    найдено, поз = [], 0
+    границы = [(a, b) for a, b, _t in узлы]
+    вставки, размечено, поз = [], [], 0
+
     for i, текст in enumerate(фрагменты):
         цель = нормализовать(текст)
         if not цель:
             continue
         k = сжатый.find(цель, поз)
-        if k < 0:                      # текст мог разойтись на кавычках
-            k = сжатый.find(цель[:40], поз)
-            if k < 0:
-                continue
-            конец_ц = k + len(цель)
-        else:
-            конец_ц = k + len(цель)
-        конец_ц = min(конец_ц, len(индексы))
-        a = места[индексы[k]]
-        b = места[индексы[конец_ц - 1]] + 1
-        найдено.append((a, b, f"{префикс}{i:04d}", i))
-        поз = конец_ц
-
-    out, размечено = xhtml, []
-    for a, b, ident, i in reversed(найдено):
-        out = out[:a] + f'<span id="{ident}">' + out[a:b] + "</span>" + out[b:]
+        if k < 0:
+            continue
+        конец = min(k + len(цель), len(индексы))
+        a, b = места[индексы[k]], места[индексы[конец - 1]] + 1
+        куски = разрезать_по_узлам(a, b, границы)
+        if not куски:
+            continue
+        for j, (ка, кб) in enumerate(куски):
+            ident = f"{префикс}{i:04d}" if j == 0 else f"{префикс}{i:04d}_{j}"
+            вставки.append((ка, кб, ident))
         размечено.append(i)
-    return out, sorted(размечено)
+        поз = конец
+
+    out = xhtml
+    for a, b, ident in sorted(вставки, reverse=True):
+        out = out[:a] + f'<span id="{ident}">' + out[a:b] + "</span>" + out[b:]
+    return out, размечено
+
+
+def разрезать_по_узлам(a, b, границы):
+    """Части отрезка [a, b), каждая целиком внутри одного текстового узла."""
+    куски = []
+    for на, нб in границы:
+        if нб <= a or на >= b:
+            continue
+        ка, кб = max(a, на), min(b, нб)
+        if кб > ка and xhtml_непустой(ка, кб):
+            куски.append((ка, кб))
+    return куски
+
+
+def xhtml_непустой(a, b):
+    return b > a
 
 
 def concat_chapter(chunks, parts, ci, fade_ms=8, words_by_id=None):
@@ -208,9 +257,35 @@ def main():
               f"размечено ({доля:.0%}), {dur/60:.1f} мин")
 
     вписать_в_opf(opf_path, добавлено, общая)
+    проверить(staging)
     упаковать(staging, args.epub)
     shutil.rmtree(staging, ignore_errors=True)
     print(f"\n{args.epub}  ({общая/60:.1f} мин звука)")
+
+
+def проверить(root):
+    """Каждый изменённый файл должен остаться разбираемым XML.
+
+    Читалка на сломанном XML говорит только «книга повреждена», поэтому
+    ошибка должна всплывать здесь, до выдачи результата.
+    """
+    import xml.etree.ElementTree as ET
+    плохие = []
+    for d, _, files in os.walk(root):
+        for f in files:
+            if not f.endswith((".xhtml", ".opf", ".smil")):
+                continue
+            p = os.path.join(d, f)
+            try:
+                ET.parse(p)
+            except ET.ParseError as e:
+                плохие.append(f"{os.path.relpath(p, root)}: {e}")
+    if плохие:
+        print("  ПОВРЕЖДЕНО:", file=sys.stderr)
+        for x in плохие[:5]:
+            print("   ", x, file=sys.stderr)
+        raise RuntimeError("книга собралась бы повреждённой: "
+                           + плохие[0].split(":", 1)[0])
 
 
 def найти_документ(root, имя):
@@ -244,10 +319,18 @@ def вписать_в_opf(opf_path, добавлено, общая):
         durs.append(f'<meta property="media:duration" refines="#ovsmil{i}">'
                     f'{clock(a["dur"])}</meta>')
         # к существующему item главы дописываем media-overlay
-        s = re.sub(r'(<item\b[^>]*href="[^"]*' + re.escape(os.path.basename(a["документ"]))
-                   + r'"[^>]*)(/?>)',
-                   lambda m: (m.group(1) + f' media-overlay="ovsmil{i}"' + m.group(2))
-                   if "media-overlay" not in m.group(1) else m.group(0), s, count=1)
+        # Тег самозакрывающийся: атрибут идёт перед "/>", иначе XML ломается.
+        шаблон = (r'<item\b[^>]*href="[^"]*'
+                  + re.escape(os.path.basename(a["документ"])) + r'"[^>]*?>')
+
+        def вписать(m):
+            тег = m.group(0)
+            if "media-overlay" in тег:
+                return тег
+            хвост = "/>" if тег.endswith("/>") else ">"
+            return тег[: -len(хвост)] + f' media-overlay="ovsmil{i}"' + хвост
+
+        s = re.sub(шаблон, вписать, s, count=1)
     s = s.replace("</manifest>", "\n".join(items) + "\n</manifest>")
     s = s.replace("</metadata>",
                   "\n".join(durs)
