@@ -35,11 +35,11 @@ final class Runner: ObservableObject {
     private var lastStage = "синтез"
     @Published var failure: String? = nil
 
-    @Published var voices: [String] = []
-    @Published var presets: [String] = []
+    @Published var voices: [(String, String, String)] = []
+    @Published var presets: [(String, String, String)] = []
     /// Системные голоса: (значение для --voice, что показать человеку)
-    @Published var system: [(String, String)] = []
-    @Published var fast: [(String, String)] = []
+    @Published var system: [(String, String, String)] = []
+    @Published var fast: [(String, String, String)] = []
 
     /// Список голосов берётся у самого конвейера, чтобы не расходился с refs/.
     func loadVoices() {
@@ -56,14 +56,18 @@ final class Runner: ObservableObject {
             guard parts.count == 2 else { continue }
             let names = parts[1].split(separator: ",").map {
                 $0.trimmingCharacters(in: .whitespaces) }
-            if line.hasPrefix("референсы") { voices = names }
-            if line.hasPrefix("пресеты") { presets = names }
-            let pairs: ([String]) -> [(String, String)] = { ns in
+            // строка голоса: значение|подпись|язык (язык может быть пуст --
+            // такой голос подходит любому языку)
+            let pairs: ([String]) -> [(String, String, String)] = { ns in
                 ns.map { n in
-                    let p = n.split(separator: "|", maxSplits: 1)
-                    return (String(p[0]), p.count > 1 ? String(p[1]) : String(p[0]))
+                    let p = n.split(separator: "|", omittingEmptySubsequences: false)
+                    return (String(p[0]),
+                            p.count > 1 ? String(p[1]) : String(p[0]),
+                            p.count > 2 ? String(p[2]) : "")
                 }
             }
+            if line.hasPrefix("референсы") { voices = pairs(names) }
+            if line.hasPrefix("пресеты") { presets = pairs(names) }
             if line.hasPrefix("система") { system = pairs(names) }
             if line.hasPrefix("быстрые") { fast = pairs(names) }
         }
@@ -293,6 +297,14 @@ struct ContentView: View {
         for u in urls where NSWorkspace.shared.open(URL(string: u)!) { return }
     }
 
+    /// Голоса, подходящие выбранному языку. Пустой язык у голоса значит
+    /// «годится для любого»; «Определить по книге» показывает все.
+    private func подходят(_ список: [(String, String, String)])
+        -> [(String, String, String)] {
+        guard language != "auto" else { return список }
+        return список.filter { $0.2.isEmpty || $0.2 == language }
+    }
+
     private func start(_ path: String) {
         runner.run(book: path, language: language, voice: voice, speed: speed,
                    format: format, dest: destPath, batch: batch)
@@ -323,26 +335,30 @@ struct ContentView: View {
                 row("Голос") {
                     Picker("", selection: $voice) {
                         Text("По языку книги").tag("")
-                        if !runner.voices.isEmpty {
+                        if !подходят(runner.voices).isEmpty {
                             Section("Клонирование по образцу") {
-                                ForEach(runner.voices, id: \.self) { Text($0).tag($0) }
-                            }
-                        }
-                        if !runner.presets.isEmpty {
-                            Section("Готовые голоса") {
-                                ForEach(runner.presets, id: \.self) { Text($0).tag($0) }
-                            }
-                        }
-                        if !runner.fast.isEmpty {
-                            Section("Быстрые — Kokoro") {
-                                ForEach(runner.fast, id: \.0) { v in
+                                ForEach(подходят(runner.voices), id: \.0) { v in
                                     Text(v.1).tag(v.0)
                                 }
                             }
                         }
-                        if !runner.system.isEmpty {
+                        if !подходят(runner.presets).isEmpty {
+                            Section("Готовые голоса") {
+                                ForEach(подходят(runner.presets), id: \.0) { v in
+                                    Text(v.1).tag(v.0)
+                                }
+                            }
+                        }
+                        if !подходят(runner.fast).isEmpty {
+                            Section("Быстрые — Kokoro") {
+                                ForEach(подходят(runner.fast), id: \.0) { v in
+                                    Text(v.1).tag(v.0)
+                                }
+                            }
+                        }
+                        if !подходят(runner.system).isEmpty {
                             Section("Системные — подсветка по словам") {
-                                ForEach(runner.system, id: \.0) { v in
+                                ForEach(подходят(runner.system), id: \.0) { v in
                                     Text(v.1).tag(v.0)
                                 }
                             }

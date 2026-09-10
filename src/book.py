@@ -83,26 +83,45 @@ def apple_voices(lang=None):
     return vs
 
 
+# Язык образца определяется по имени файла в refs/README.md; проще и
+# надёжнее держать его тут, пока образцов немного.
+ЯЗЫК_ОБРАЗЦА = {
+    "vakhshtayn": "ru",
+    "linda_johnson": "en",
+    "bryan_ness": "en",
+    "meredith_hughes": "en",
+}
+
+
 def available_voices():
-    """Три источника голоса: образцы для клонирования, пресеты, система."""
+    """Три источника голоса: образцы для клонирования, пресеты, система.
+
+    К каждому голосу приписан язык -- окно показывает только подходящие
+    выбранному языку книги.
+    """
     refs = sorted(n[:-4] for n in os.listdir(REFS)
                   if n.endswith(".wav") and os.path.exists(
                       os.path.join(REFS, n[:-4] + ".txt")))
     # только языки, которые конвейер поддерживает, иначе список в сотню строк
-    apple = [f"apple:{v['identifier']}|{v['name']} · {v['language']} · {v['quality']}"
+    apple = [f"apple:{v['identifier']}|{v['name']} · {v['language']} · "
+             f"{v['quality']}|{v['language'][:2]}"
              for v in apple_voices()
              if v["language"][:2] in REFERENCE]
     kok = []
     for v in kokoro_voices():
         eng, name = v.split(":", 1)
         if eng == "kokoro-ru":
-            label = f"{name} · русский"
+            label, язык = f"{name} · русский", "ru"
         else:
             lang = KOKORO_LANG.get(name[:1], "")
             sex = "жен." if name[1:2] == "f" else "муж."
-            label = f"{name[3:]} · {lang} · {sex}"
-        kok.append(f"{v}|{label}")
-    return {"референсы": refs, "пресеты": PRESETS, "система": apple,
+            label, язык = f"{name[3:]} · {lang} · {sex}", "en"
+        kok.append(f"{v}|{label}|{язык}")
+
+    рефы = [f"{n}|{n}|{ЯЗЫК_ОБРАЗЦА.get(n, '')}" for n in refs]
+    # Пресеты Qwen многоязычные -- показываем всегда.
+    пресеты = [f"{n}|{n}|" for n in PRESETS]
+    return {"референсы": рефы, "пресеты": пресеты, "система": apple,
             "быстрые": kok}
 SPOKEN = {"ru": ("Russian", "ru"), "en": ("English", "en")}
 
