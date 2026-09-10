@@ -270,7 +270,7 @@ def main():
     ap.add_argument("--lang-code", default="ru")
     ap.add_argument("--limit-chunks", type=int, default=None,
                     help="озвучить только первые N чанков главы")
-    ap.add_argument("--model", default="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit")
+    ap.add_argument("--model", help="модель; по умолчанию берётся из описания движка")
     ap.add_argument("--target", type=int, default=200)
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--temperature", type=float, default=0.8)
@@ -284,6 +284,17 @@ def main():
     args = ap.parse_args()
 
     os.environ["OVERLAY_ENGINE"] = args.engine
+    if not args.model:
+        # Модель определяется движком. Раньше здесь стояла Qwen по
+        # умолчанию, и Kokoro молча синтезировала ею: голос был чужой, а
+        # скорость -- в пятнадцать раз ниже её собственной.
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "engines"))
+        from registry import ENGINES
+        models = ENGINES.get(args.engine, {}).get("модели") or []
+        if not models:
+            sys.exit(f"для движка {args.engine} не задана модель")
+        args.model = models[0][0]
     if args.engine == "qwen" and not args.voice and not (args.ref_audio and args.ref_text):
         ap.error("нужен либо --voice, либо пара --ref-audio/--ref-text")
     if args.engine == "apple":
