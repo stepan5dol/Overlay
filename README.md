@@ -38,7 +38,7 @@ Everything runs locally on Apple Silicon. No cloud, no API keys.
 Download the DMG from [Releases](../../releases), or build it yourself:
 
 ```sh
-git clone https://github.com/stepan5dol/overlay
+git clone https://github.com/stepan5dol/Overlay
 cd overlay
 app/build.sh
 ```
