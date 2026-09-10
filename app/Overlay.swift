@@ -380,46 +380,6 @@ struct ContentView: View {
                         Text("И то, и другое").tag("both")
                     }.labelsHidden().pickerStyle(.menu)
                 }
-                Divider().opacity(0.5)
-                row("Папка") {
-                    HStack(spacing: 8) {
-                        Text((destPath as NSString).abbreviatingWithTildeInPath)
-                            .font(.callout).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                        Button("Изменить…") { pickFolder() }
-                            .buttonStyle(.link).font(.callout)
-                        Spacer()
-                    }
-                }
-                if voice.isEmpty || !voice.contains(":") {
-                    Divider().opacity(0.5)
-                    row("Пакет") {
-                        HStack(spacing: 10) {
-                            Picker("", selection: $batch) {
-                                Text("По одному").tag(1)
-                                Text("8").tag(8)
-                                Text("16").tag(16)
-                                Text("32").tag(32)
-                                Text("64").tag(64)
-                            }.labelsHidden().pickerStyle(.segmented)
-                        }
-                    }
-                    Text("Сколько фрагментов Qwen считает за раз. Больше — "
-                         + "быстрее и больше памяти: 8 даёт около 7×, "
-                         + "32 — около 9× на M4 Pro.")
-                        .font(.caption).foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Divider().opacity(0.5)
-                row("Темп") {
-                    HStack(spacing: 10) {
-                        Slider(value: $speed, in: 0.7...1.6, step: 0.05)
-                        Text(String(format: "%.2f×", speed))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(width: 48, alignment: .trailing)
-                    }
-                }
             }
         }
         .disabled(runner.running)
@@ -551,6 +511,9 @@ struct ContentView: View {
             }
 
             HStack(spacing: 12) {
+                Button("Настройки…") {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }.buttonStyle(.link).font(.callout)
                 Button(showLog ? "Скрыть подробности" : "Подробности") {
                     withAnimation(.smooth(duration: 0.2)) { showLog.toggle() }
                 }
@@ -597,5 +560,6 @@ struct OverlayApp: App {
         Window("Overlay", id: "main") { ContentView() }
             .windowResizability(.contentSize)
             .windowStyle(.hiddenTitleBar)
+        Settings { SettingsView() }
     }
 }

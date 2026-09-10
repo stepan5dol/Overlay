@@ -9,7 +9,7 @@ PYTHON="${THORIUM_PYTHON:-/Users/stepandolzhenko/qwen3-tts-apple-silicon/.venv/b
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-swiftc -O -parse-as-library Overlay.swift -o "$APP/Contents/MacOS/Overlay" \
+swiftc -O -parse-as-library Overlay.swift Settings.swift -o "$APP/Contents/MacOS/Overlay" \
        -target arm64-apple-macos26.0
 
 cat > "$APP/Contents/Info.plist" <<PLIST
