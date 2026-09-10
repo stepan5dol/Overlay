@@ -231,7 +231,7 @@ struct DropZone: View {
                 .symbolEffect(.bounce, value: hovering)
             VStack(spacing: 3) {
                 Text("Перетащите книгу").font(.title3.weight(.medium))
-                Text("EPUB").font(.caption).foregroundStyle(.tertiary)
+                Text("EPUB или PDF").font(.caption).foregroundStyle(.tertiary)
             }
             Button("Выбрать файл…") { pick() }
                 .buttonStyle(.glass)
@@ -251,7 +251,8 @@ struct DropZone: View {
         .onDrop(of: [.fileURL], isTargeted: $hovering) { providers in
             guard let p = providers.first else { return false }
             _ = p.loadObject(ofClass: URL.self) { url, _ in
-                guard let url, url.pathExtension.lowercased() == "epub" else { return }
+                let ext = url?.pathExtension.lowercased() ?? ""
+                guard let url, ext == "epub" || ext == "pdf" else { return }
                 DispatchQueue.main.async { onPick(url.path) }
             }
             return true
@@ -260,7 +261,8 @@ struct DropZone: View {
 
     private func pick() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "epub") ?? .data]
+        panel.allowedContentTypes = [UTType(filenameExtension: "epub") ?? .data,
+                                     UTType.pdf]
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url { onPick(url.path) }
     }

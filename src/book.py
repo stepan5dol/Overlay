@@ -209,6 +209,39 @@ def каталог_фрагментов(work):
     return os.path.join(work, "parts")
 
 
+def превратить_pdf(pdf, python_по_умолчанию):
+    """PDF -> EPUB, дальше книга идёт обычным путём.
+
+    Разбор делает docling в своём окружении: он размечает страницу и
+    отделяет колонтитулы от текста. Готовый EPUB кладётся рядом с
+    рабочими файлами и переиспользуется при повторном запуске.
+    """
+    sys.path.insert(0, os.path.join(HERE, "engines"))
+    from registry import env_python, is_ready
+
+    if not is_ready("docling"):
+        print("ЭТАП ставлю разборщик PDF", flush=True)
+        код = subprocess.call([sys.executable,
+                               os.path.join(HERE, "engines", "install.py"),
+                               "docling"])
+        if код != 0:
+            sys.exit("не удалось поставить разборщик PDF")
+
+    готовый = os.path.join(ROOT, "out", slug(pdf) + "__из_pdf.epub")
+    os.makedirs(os.path.dirname(готовый), exist_ok=True)
+    if os.path.exists(готовый) and os.path.getmtime(готовый) > os.path.getmtime(pdf):
+        print(f"беру уже разобранный PDF: {os.path.basename(готовый)}", flush=True)
+        return готовый
+
+    print("ЭТАП разбираю PDF", flush=True)
+    код = subprocess.call([env_python("docling"),
+                           os.path.join(HERE, "engines", "pdf2epub.py"), pdf,
+                           "--out", готовый])
+    if код != 0:
+        sys.exit("не удалось разобрать PDF")
+    return готовый
+
+
 def sha_of(path, limit=1 << 20):
     """Короткий отпечаток книги: чтобы правка исходника не смешалась
     со старой озвучкой."""
@@ -259,6 +292,11 @@ def main():
     book = os.path.abspath(args.book)
     if not os.path.exists(book):
         sys.exit(f"нет такого файла: {book}")
+
+    исходный_pdf = None
+    if book.lower().endswith(".pdf"):
+        исходный_pdf = book
+        book = превратить_pdf(book, args.python)
 
     lang, how = (args.language, "задан вручную") if args.language else detect_language(book)
     if lang not in REFERENCE:
@@ -394,7 +432,8 @@ def main():
                          (apple or preset or os.path.basename(ref))),
                "темп": args.speed,
                "модель": model or "по умолчанию", "результат": produced,
-               "команды": commands},
+               "команды": commands,
+               "исходный_pdf": исходный_pdf},
               open(manifest, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     stats = {}
     try:
