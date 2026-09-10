@@ -165,7 +165,52 @@ def appletts_binary():
     return None
 
 
+def synth_batch(chapters, parts, cmd, label):
+    """Синтез пакетами: все задания уходят разом, ответы приходят по мере
+    готовности.
+
+    Отличие от synth_stream: там на каждое задание ждут ответ, а батч-
+    помощник читает stdin до конца, прежде чем начать -- получалась
+    взаимная блокировка.
+    """
+    tasks = []
+    for ci, ch in enumerate(chapters):
+        for i, text in enumerate(ch["chunks"]):
+            name = f"{ci:04d}_{i:04d}"
+            if not os.path.exists(os.path.join(parts, name + ".wav")):
+                tasks.append({"id": name, "text": text})
+    print(f"к синтезу: {len(tasks)}", flush=True)
+    if not tasks:
+        return {}
+
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            text=True, bufsize=1)
+    for t in tasks:
+        proc.stdin.write(json.dumps(t, ensure_ascii=False) + "\n")
+    proc.stdin.close()
+
+    from tqdm import tqdm
+    bar = tqdm(total=len(tasks), unit="фрагмент", ncols=88)
+    сделано = 0
+    for line in proc.stdout:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        r = json.loads(line)
+        if r.get("error"):
+            print(f"    не озвучено {r['id']}: {r['error']}", file=sys.stderr)
+        else:
+            сделано += 1
+        bar.update(1)
+    bar.close()
+    proc.wait()
+    if not сделано:
+        sys.exit(f"{label}: не озвучено ни одного фрагмента")
+    return {}
+
+
 def synth_stream(chapters, parts, cmd, label):
+    # ниже: пустой результат считается сбоем, а не успехом
     """Синтез внешним помощником, который читает задания из stdin.
 
     Так работают движки, живущие в своём окружении: системный голос Apple и
@@ -205,6 +250,8 @@ def synth_stream(chapters, parts, cmd, label):
     bar.close()
     proc.stdin.close()
     proc.wait()
+    if tasks and not extra:
+        sys.exit(f"{label}: не озвучено ни одного фрагмента")
     return extra
 
 
@@ -281,6 +328,9 @@ def main():
                     help="движок синтеза")
     ap.add_argument("--rate", type=float, default=None,
                     help="скорость системного голоса (только для apple)")
+    ap.add_argument("--batch", type=int, default=8,
+                    help="сколько фрагментов Qwen считает за раз; "
+                         "больше -- быстрее, но больше памяти")
     args = ap.parse_args()
 
     os.environ["OVERLAY_ENGINE"] = args.engine
@@ -319,6 +369,29 @@ def main():
         print("готово")
         return
 
+    if args.engine == "qwen" and args.batch > 1:
+        # Пакетом Qwen считает в разы быстрее: веса читаются из памяти один
+        # раз на пакет, а не на каждый фрагмент.
+        # Помощник запускается интерпретатором своего окружения: там стоит
+        # версия mlx-audio с батчингом.
+        here = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, os.path.join(here, "engines"))
+        from registry import env_python, is_ready
+        py = env_python("qwen") if is_ready("qwen") else sys.executable
+        helper = os.path.join(here, "engines", "qwen_batch.py")
+        cmd = [py, helper, "--out", parts,
+               "--model", args.model, "--batch", str(args.batch),
+               "--lang-code", args.lang_code,
+               "--temperature", str(args.temperature),
+               "--top-p", str(args.top_p)]
+        if args.ref_audio:
+            cmd += ["--ref-audio", args.ref_audio, "--ref-text", args.ref_text]
+        if args.voice:
+            cmd += ["--voice", args.voice]
+        synth_batch(chapters, parts, cmd, "Qwen пакетом")
+        print("готово")
+        return
+
     if args.engine == "kokoro-ru":
         helper = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "engines", "kokoro_ru.py")
@@ -330,6 +403,29 @@ def main():
 
     if args.engine == "apple":
         synth_apple(chapters, parts, args.voice, args.rate)
+        print("готово")
+        return
+
+    if args.engine == "qwen" and args.batch > 1:
+        # Пакетом Qwen считает в разы быстрее: веса читаются из памяти один
+        # раз на пакет, а не на каждый фрагмент.
+        # Помощник запускается интерпретатором своего окружения: там стоит
+        # версия mlx-audio с батчингом.
+        here = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, os.path.join(here, "engines"))
+        from registry import env_python, is_ready
+        py = env_python("qwen") if is_ready("qwen") else sys.executable
+        helper = os.path.join(here, "engines", "qwen_batch.py")
+        cmd = [py, helper, "--out", parts,
+               "--model", args.model, "--batch", str(args.batch),
+               "--lang-code", args.lang_code,
+               "--temperature", str(args.temperature),
+               "--top-p", str(args.top_p)]
+        if args.ref_audio:
+            cmd += ["--ref-audio", args.ref_audio, "--ref-text", args.ref_text]
+        if args.voice:
+            cmd += ["--voice", args.voice]
+        synth_batch(chapters, parts, cmd, "Qwen пакетом")
         print("готово")
         return
 

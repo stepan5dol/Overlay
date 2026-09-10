@@ -87,7 +87,7 @@ final class Runner: ObservableObject {
     }
 
     func run(book: String, language: String, voice: String, speed: Double,
-             format: String, dest: String) {
+             format: String, dest: String, batch: Int = 8) {
         guard !running else { return }
         stopped = false; failure = nil
         running = true; done = 0; total = 0; result = nil; results = []
@@ -102,7 +102,7 @@ final class Runner: ObservableObject {
         if language != "auto" { argv += ["--language", language] }
         if !voice.isEmpty { argv += ["--voice", voice] }
         if abs(speed - 1.0) > 0.001 { argv += ["--speed", String(format: "%.2f", speed)] }
-        argv += ["--format", format]
+        argv += ["--format", format, "--batch", String(batch)]
         if !dest.isEmpty { argv += ["--dest", dest] }
         p.arguments = argv
         p.currentDirectoryURL = URL(fileURLWithPath: root)
@@ -275,6 +275,7 @@ struct ContentView: View {
     @AppStorage("speed") private var speed = 1.0
     @AppStorage("format") private var format = "epub"
     @AppStorage("dest") private var dest = ""
+    @AppStorage("batch") private var batch = 8
 
     private var destPath: String {
         dest.isEmpty ? NSHomeDirectory() + "/Documents" : dest
@@ -294,7 +295,7 @@ struct ContentView: View {
 
     private func start(_ path: String) {
         runner.run(book: path, language: language, voice: voice, speed: speed,
-                   format: format, dest: destPath)
+                   format: format, dest: destPath, batch: batch)
     }
 
     private func pickFolder() {
@@ -389,6 +390,25 @@ struct ContentView: View {
                             .buttonStyle(.link).font(.callout)
                         Spacer()
                     }
+                }
+                if voice.isEmpty || !voice.contains(":") {
+                    Divider().opacity(0.5)
+                    row("Пакет") {
+                        HStack(spacing: 10) {
+                            Picker("", selection: $batch) {
+                                Text("По одному").tag(1)
+                                Text("8").tag(8)
+                                Text("16").tag(16)
+                                Text("32").tag(32)
+                                Text("64").tag(64)
+                            }.labelsHidden().pickerStyle(.segmented)
+                        }
+                    }
+                    Text("Сколько фрагментов Qwen считает за раз. Больше — "
+                         + "быстрее и больше памяти: 8 даёт около 7×, "
+                         + "32 — около 9× на M4 Pro.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Divider().opacity(0.5)
                 row("Темп") {

@@ -277,6 +277,8 @@ def main():
     ap.add_argument("--format", default="epub", choices=("epub", "m4b", "both"),
                     help="epub с подсветкой, аудиокнига m4b, или оба")
     ap.add_argument("--dest", help="куда положить результат")
+    ap.add_argument("--batch", type=int, default=8,
+                    help="фрагментов за раз для Qwen (1 -- по одному)")
     ap.add_argument("--keep-work", action="store_true",
                     help="не удалять промежуточные файлы после сборки")
     args = ap.parse_args()
@@ -377,7 +379,8 @@ def main():
     narrate = [engine_py, os.path.join(HERE, "narrate.py"),
                "--epub", book, "--out", work,
                "--language", spoken, "--lang-code", code,
-               "--workers", str(args.workers)]
+               "--workers", str(args.workers),
+               "--batch", str(args.batch)]
     if kokoro:
         eng, name = kokoro
         narrate += ["--engine", eng, "--voice", name]
