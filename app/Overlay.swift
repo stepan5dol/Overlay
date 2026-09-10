@@ -334,7 +334,13 @@ struct ContentView: View {
                 Divider().opacity(0.5)
                 row("Голос") {
                     Picker("", selection: $voice) {
-                        Text("По языку книги").tag("")
+                        // Пункт по умолчанию -- в своей секции: иначе при
+                        // выбранном пустом значении SwiftUI рисует его
+                        // безымянной полосой посреди групп.
+                        Section {
+                            Text("Выбрать автоматически").tag("")
+                        }
+
                         if !подходят(runner.voices).isEmpty {
                             Section("Клонирование по образцу") {
                                 ForEach(подходят(runner.voices), id: \.0) { v in
