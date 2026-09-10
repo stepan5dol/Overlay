@@ -11,7 +11,11 @@ import argparse, json, os, subprocess, sys, venv
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from registry import ENGINES, env_dir, env_python, is_ready   # noqa: E402
+from registry import ENGINES, PARSERS, env_dir, env_python, is_ready  # noqa: E402
+
+# Разборщики PDF ставятся тем же способом, что и движки синтеза.
+ENGINES = {**ENGINES, **{k: {**v, "модели": [], "правки": [], "языки": []}
+                         for k, v in PARSERS.items()}}
 
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
