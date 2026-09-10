@@ -21,7 +21,11 @@ REFERENCE = {                       # язык -> голос по умолчан
 }
 # Пресеты озвучиваются моделью CustomVoice: ей референс не нужен, но и
 # клонировать она не умеет -- это другой путь генерации.
-CUSTOM_VOICE_MODEL = "/Users/stepandolzhenko/qwen3-tts-apple-silicon/qwen3-tts-patched"
+# Модель для пресетных голосов. Берётся из кэша HuggingFace, а не из
+# локальной папки: путь к чужому каталогу работал только на одной машине.
+CUSTOM_VOICE_MODEL = os.environ.get(
+    "OVERLAY_CUSTOM_VOICE_MODEL",
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit")
 PRESETS = ["serena", "vivian", "uncle_fu", "ryan", "aiden",
            "ono_anna", "sohee", "eric", "dylan"]
 

@@ -5,7 +5,9 @@ set -e
 cd "$(dirname "$0")"
 APP="Overlay.app"
 REPO="$(cd .. && pwd)"
-PYTHON="${THORIUM_PYTHON:-/Users/stepandolzhenko/qwen3-tts-apple-silicon/.venv/bin/python}"
+# Интерпретатор для конвейера. По умолчанию -- окружение движка, которое
+# приложение создаёт само; переопределяется через THORIUM_PYTHON.
+PYTHON="${THORIUM_PYTHON:-$HOME/Library/Application Support/Overlay/engines/qwen/bin/python3}"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 

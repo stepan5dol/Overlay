@@ -1,75 +1,73 @@
-# Thorium 2.0
+# Overlay
 
-EPUB → EPUB 3 с media overlay: синхронная озвучка, подсветка читаемого
-фрагмента. Синтез локальный, Qwen3-TTS на Apple Silicon.
+Turns a book into a book that reads itself: the text highlights as the audio
+plays. Drop in an EPUB or a PDF, get back an EPUB 3 with Media Overlays —
+or an M4B audiobook.
 
-## Главное, что было найдено
+Everything runs locally on Apple Silicon. No cloud, no API keys.
 
-Клонирование голоса по референсу **не работало**. Загрузчик `mlx-audio`
-разбирает `decoder_config` токенизатора речи и не разбирает
-`encoder_config`, хотя тот есть и в `config.json`, и в весах (225
-тензоров). Из-за этого `has_encoder` = False, а `generate()` включает ICL
-только при `has_encoder`. Каждый вызов молча уходил на слабое
-клонирование по одному эмбеддингу говорящего — отсюда чужой акцент в
-начале генераций.
+## What it does
 
-Лечится `patches/enable_icl_encoder.py`. `narrate.py` падает на старте,
-если патч не применён, чтобы это не отвалилось молча.
+- **EPUB in, EPUB out.** The narration is added *into* your book: layout,
+  images and styles stay exactly as they were.
+- **PDF in.** Parsed with [docling](https://github.com/docling-project/docling),
+  which separates body text from running heads and keeps figures and tables.
+- **Four voice engines**, installed on demand from the app:
 
-Вторая находка: `soup.get_text(separator=' \n. ')` в старом генераторе
-вставлял разделитель между всеми узлами, из-за чего каждая глава
-начиналась с вереницы голых точек. Извлечение здесь поблочное, инлайновые
-теги склеиваются без вставки символов.
+  | engine | voices | speed | clones a voice |
+  |---|---|---|---|
+  | Qwen3-TTS | your own sample, 9 presets | 9× with batching | yes |
+  | Kokoro | 28 English | 19× | no |
+  | Kokoro RU | Sveta, Masha, Dima | 18× | no |
+  | System (macOS) | installed system voices | instant | no |
 
-## Запуск
+  Speeds measured on an M4 Pro, relative to real time.
 
-    python3 patches/enable_icl_encoder.py ПУТЬ_К/site-packages
+- **Word-level highlighting** when using system voices: `AVSpeechSynthesizer`
+  reports the range of every spoken word, so no forced alignment is needed.
+  Other engines highlight sentence by sentence.
 
-    python3 src/narrate.py --epub КНИГА.epub --out РАБОЧАЯ_ПАПКА \
-        --ref-audio referens.wav --ref-text ref_text.txt
-    python3 src/mo.py --out РАБОЧАЯ_ПАПКА --epub ГОТОВО.epub --title "…"
+## Requirements
 
-`--only N` озвучивает одну главу. Синтез возобновляемый: готовые чанки
-пропускаются.
+- macOS 26 or later, Apple Silicon
+- `ffmpeg` (`brew install ffmpeg`)
+- ~3 GB of disk per engine, downloaded on first use
 
-## Тайминги
+## Install
 
-Выравнивание не нужно: каждый чанк — отдельная генерация с известной
-длительностью, из них напрямую строится SMIL.
+Download the DMG from [Releases](../../releases), or build it yourself:
 
-## Файлы
+```sh
+git clone https://github.com/stepan5dol/overlay
+cd overlay
+app/build.sh
+```
 
-    src/narrate.py   EPUB → текст → чанки → аудио по чанкам
-    src/mo.py        чанки + аудио → EPUB 3 с media overlay
-    src/assemble.py  чанки → главы → M4B (обычная аудиокнига)
-    src/extract.py   извлечение главы из PDF (часть 2, не подключено)
-    patches/         правка mlx-audio, включающая ICL
-    docs/            заметки по окружению и референсу
+## Command line
 
-## Как пользоваться
+```sh
+python3 src/book.py BOOK.epub                    # or BOOK.pdf
+python3 src/book.py BOOK.epub --voice sveta --format both
+python3 src/book.py --list-voices
+```
 
-Приложение в `/Applications/Overlay.app`: перетащить книгу в окно —
-получить EPUB с синхронной озвучкой. Язык определяется по книге, голос
-подбирается под язык, правка `mlx-audio` применяется сама.
+Nothing is required beyond the file itself: the language is detected from the
+book, a matching voice is picked, and missing engines are installed on demand.
 
-То же из командной строки:
+## Voice samples
 
-    python3 src/book.py КНИГА.epub
+`refs/` holds reference recordings used for voice cloning, each with its
+transcript — cloning needs an accurate one. All shipped samples are public
+domain: [LJSpeech](https://keithito.com/LJ-Speech-Dataset/) (Linda Johnson) and
+[LibriVox](https://librivox.org) (Bryan Ness, Meredith Hughes).
 
-Обязательных настроек нет. Необязательные: `--only N` (одна глава),
-`--limit-chunks N`, `--workers N`, `--language ru|en`.
+To add your own: put `name.wav` (10 seconds of clean speech) and `name.txt`
+with its exact transcript into `refs/`.
 
-Синтез возобновляемый: готовые фрагменты пропускаются, прерванный прогон
-продолжается с места остановки.
+**Please only clone a voice you have permission to use.**
 
-## Устройство
+## Third-party licences
 
-    app/Overlay.swift   окно, ход работы, результат
-    app/build.sh        сборка бандла, пути прописываются внутрь
-    src/book.py         единственный вход: книга -> overlay
-    src/narrate.py      извлечение текста, нарезка, синтез по фрагментам
-    src/mo.py           фрагменты + аудио -> EPUB 3 с media overlay
-    src/assemble.py     фрагменты -> главы -> M4B (обычная аудиокнига)
-    src/extract.py      извлечение главы из PDF (часть 2, не подключено)
-    refs/               эталонные голоса: ru_female, en_female_ljspeech
-    patches/            правка mlx-audio, включающая ICL
+The code here is MIT. The models and libraries it downloads have their own:
+Qwen3-TTS and Kokoro under Apache 2.0, `kokoro-ru` weights under OpenRAIL,
+`ffmpeg` under GPL (used as an external binary, not linked).
