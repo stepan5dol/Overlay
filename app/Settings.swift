@@ -190,3 +190,32 @@ struct SettingsView: View {
         if panel.runModal() == .OK, let u = panel.url { dest = u.path }
     }
 }
+
+
+/// Окно настроек, открываемое из главного окна.
+///
+/// Приложение собрано без строки меню, поэтому стандартный пункт
+/// «Настройки…» отсутствует и селектор showSettingsWindow: ничего не даёт.
+enum ОкноНастроек {
+    private static var окно: NSWindow?
+
+    @MainActor
+    static func показать() {
+        if let w = окно {
+            w.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered, defer: false)
+        w.title = "Настройки"
+        w.isReleasedWhenClosed = false
+        w.center()
+        w.contentView = NSHostingView(rootView: SettingsView())
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        окно = w
+    }
+}

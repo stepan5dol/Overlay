@@ -527,13 +527,28 @@ struct ContentView: View {
             }
 
             HStack(spacing: 12) {
-                Button("Настройки…") {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                }.buttonStyle(.link).font(.callout)
-                Button(showLog ? "Скрыть подробности" : "Подробности") {
-                    withAnimation(.smooth(duration: 0.2)) { showLog.toggle() }
+                // Своё окно настроек: у приложения нет строки меню, поэтому
+                // стандартный селектор Settings-сцены ни к чему не приводит.
+                Button {
+                    ОкноНастроек.показать()
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 15))
                 }
-                .buttonStyle(.link).font(.callout)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Настройки")
+
+                Button {
+                    withAnimation(.smooth(duration: 0.2)) { showLog.toggle() }
+                } label: {
+                    Image(systemName: showLog ? "info.circle.fill" : "info.circle")
+                        .font(.system(size: 15))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(showLog ? AnyShapeStyle(Color.accentColor)
+                                         : AnyShapeStyle(.secondary))
+                .help("Подробности")
                 Spacer()
                 if runner.running {
                     Button("Остановить", role: .destructive) { runner.stop() }
