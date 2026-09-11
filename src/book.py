@@ -154,24 +154,6 @@ def detect_language(epub_path):
     return ("ru" if share > 0.3 else "en"), f"по тексту, кириллицы {share:.0%}"
 
 
-def ensure_patch(python):
-    """ICL включается правкой загрузчика mlx-audio; применяем, если её нет."""
-    sp = subprocess.run(
-        [python, "-c", "import mlx_audio, os; print(os.path.dirname(os.path.dirname(mlx_audio.__file__)))"],
-        capture_output=True, text=True).stdout.strip()
-    if not sp:
-        sys.exit("не найден mlx_audio в выбранном python")
-    target = os.path.join(sp, "mlx_audio/tts/models/qwen3_tts/qwen3_tts.py")
-    if "Qwen3TTSTokenizerEncoderConfig(**filtered)" in open(target).read():
-        return "уже применена"
-    r = subprocess.run([sys.executable,
-                        os.path.join(ROOT, "patches", "enable_icl_encoder.py"), sp],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        sys.exit("не удалось применить правку mlx-audio:\n" + r.stderr)
-    return "применена сейчас"
-
-
 def own_process_group():
     """Прогон живёт в своей группе процессов.
 
@@ -382,10 +364,8 @@ def main():
         print(f"голос:    {preset + ' (пресет)' if preset else os.path.basename(ref)}")
     if abs(args.speed - 1.0) > 1e-3:
         print(f"темп:     {args.speed}x")
-    if apple or kokoro:
-        print("правка:   не нужна")
-    else:
-        print(f"правка:   {ensure_patch(args.python) if not preset else 'не нужна для пресетов'}")
+    # Правка mlx-audio больше не нужна: в 0.5.3 ошибку с encoder_config
+    # исправили, и патч из проекта убран.
     print(f"папка:    {dest}")
     print(f"результат: {'аудиокнига и EPUB' if args.format == 'both' else ('аудиокнига' if args.format == 'm4b' else 'EPUB с подсветкой')}\n",
           flush=True)
@@ -494,4 +474,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Любая ошибка должна дойти до окна строкой СБОЙ, иначе прогон просто
+    # исчезает и человек видит пустой экран без объяснения.
+    try:
+        main()
+    except SystemExit as e:
+        причина = str(e) if e.code not in (0, None) else ""
+        if причина:
+            print(f"СБОЙ {причина}", flush=True)
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"СБОЙ {type(e).__name__}: {str(e)[:160]}", flush=True)
+        sys.exit(1)
