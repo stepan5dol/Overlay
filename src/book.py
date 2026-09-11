@@ -12,6 +12,11 @@ import argparse, json, os, re, signal, subprocess, sys, unicodedata
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import state as st
+
+# Рабочие файлы -- в каталоге данных пользователя, а не рядом с кодом:
+# приложение живёт в /Applications, куда писать нельзя, и прогоны попадали
+# внутрь бандла, пропадая при первой же переустановке.
+РАБОЧИЙ = os.path.expanduser("~/Library/Application Support/Overlay/work")
 ROOT = os.path.dirname(HERE)
 REFS = os.path.join(ROOT, "refs")
 
@@ -232,7 +237,7 @@ def превратить_pdf(pdf, python_по_умолчанию):
         if код != 0:
             sys.exit("не удалось поставить разборщик PDF")
 
-    готовый = os.path.join(ROOT, "out", slug(pdf) + "__из_pdf.epub")
+    готовый = os.path.join(РАБОЧИЙ, slug(pdf) + "__из_pdf.epub")
     os.makedirs(os.path.dirname(готовый), exist_ok=True)
     if os.path.exists(готовый) and os.path.getmtime(готовый) > os.path.getmtime(pdf):
         print(f"беру уже разобранный PDF: {os.path.basename(готовый)}", flush=True)
@@ -331,7 +336,7 @@ def main():
                        (args.voice or REFERENCE[lang]).replace(":", "-"))
     if abs(args.speed - 1.0) > 1e-3:
         voice_tag += f"@{args.speed:g}"
-    work = args.out or os.path.join(ROOT, "out", f"{slug(book)}__{voice_tag}")
+    work = args.out or os.path.join(РАБОЧИЙ, f"{slug(book)}__{voice_tag}")
     dest = args.dest or os.path.expanduser("~/Documents")
     os.makedirs(dest, exist_ok=True)
     stem = f"{slug(book)}__{voice_tag}"

@@ -5,6 +5,9 @@ set -e
 cd "$(dirname "$0")"
 APP="Overlay.app"
 REPO="$(cd .. && pwd)"
+# В раздаваемом образе путь к каталогу разработчика не нужен: конвейер
+# лежит внутри бандла. Оставляем его только при сборке для себя.
+REPO_HINT="${THORIUM_KEEP_REPO_PATH:+$REPO}"
 # Интерпретатор для конвейера. По умолчанию -- окружение движка, которое
 # приложение создаёт само; переопределяется через THORIUM_PYTHON.
 # Интерпретатор указывает внутрь бандла; при разработке переопределяется
@@ -30,7 +33,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>ThoriumRepoRoot</key><string>$REPO</string>
+  <key>ThoriumRepoRoot</key><string>$REPO_HINT</string>
   <key>ThoriumPython</key><string>$PYTHON</string>
   <key>ThoriumBundled</key><true/>
   <key>CFBundleDocumentTypes</key><array><dict>
@@ -55,7 +58,8 @@ else
 fi
 
 mkdir -p "$APP/Contents/Resources/src" "$APP/Contents/Resources/refs"
-rsync -a --exclude "__pycache__" ../src/ "$APP/Contents/Resources/src/"
+rsync -a --exclude "__pycache__" --exclude "out" --exclude "*.pyc" \
+      ../src/ "$APP/Contents/Resources/src/"
 rsync -a --exclude "vakhshtayn.*" ../refs/ "$APP/Contents/Resources/refs/"
 cp ../README.md ../LICENSE "$APP/Contents/Resources/" 2>/dev/null || true
 [ -f appletts ] && cp appletts "$APP/Contents/Resources/"
