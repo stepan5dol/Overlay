@@ -158,8 +158,9 @@ def appletts_binary():
     """Помощник синтеза системным голосом: рядом в app/ или внутри бандла."""
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(here)
-    for c in (os.path.join(root, "app", "appletts"),
-              os.path.join(root, "Resources", "appletts")):
+    # Внутри бандла лежит рядом с src/, при разработке -- в app/
+    for c in (os.path.join(root, "appletts"),
+              os.path.join(root, "app", "appletts")):
         if os.path.exists(c):
             return c
     return None
@@ -342,9 +343,11 @@ def main():
                                         "engines"))
         from registry import ENGINES
         models = ENGINES.get(args.engine, {}).get("модели") or []
-        if not models:
+        # Системному голосу модель не нужна: синтезирует сама macOS.
+        if models:
+            args.model = models[0][0]
+        elif args.engine != "apple":
             sys.exit(f"для движка {args.engine} не задана модель")
-        args.model = models[0][0]
     if args.engine == "qwen" and not args.voice and not (args.ref_audio and args.ref_text):
         ap.error("нужен либо --voice, либо пара --ref-audio/--ref-text")
     if args.engine == "apple":

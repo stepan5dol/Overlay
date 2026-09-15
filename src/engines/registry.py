@@ -16,7 +16,10 @@ ENGINES = {
         "название": "Системный голос",
         "описание": "Голоса macOS. Мгновенно, подсветка по словам.",
         "языки": ["ru", "en"],
-        "пакеты": [],                       # ничего не нужно
+        # Сам синтез делает система, но книгу всё равно надо разобрать и
+        # собрать -- для этого нужны те же библиотеки, что и остальным.
+        "python": "3.13",
+        "пакеты": ["ebooklib", "beautifulsoup4", "soundfile", "numpy", "tqdm"],
         "модели": [],
         "правки": [],
         "клонирование": False,
@@ -127,10 +130,8 @@ def env_dir(engine):
 
 def env_python(engine):
     """Путь к интерпретатору окружения движка (может ещё не существовать)."""
-    if engine == "apple":
-        return sys.executable            # системному голосу python не нужен
     return os.path.join(env_dir(engine), "bin", "python3")
 
 
 def is_ready(engine):
-    return engine == "apple" or os.path.exists(env_python(engine))
+    return os.path.exists(env_python(engine))

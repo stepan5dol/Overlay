@@ -37,6 +37,15 @@ PRESETS = ["serena", "vivian", "uncle_fu", "ryan", "aiden",
 
 KOKORO_LANG = {"a": "американский", "b": "британский"}
 
+# Голоса, которые появятся после установки движка. Нужны, чтобы список не
+# был пустым у того, кто ещё ничего не скачал.
+ИЗВЕСТНЫЕ_ГОЛОСА = {
+    "kokoro": ["af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky",
+               "am_adam", "am_michael", "am_onyx", "am_puck",
+               "bf_emma", "bf_isabella", "bm_george", "bm_lewis"],
+    "kokoro-ru": ["sveta", "masha", "dima"],
+}
+
 
 def kokoro_voices():
     """Голоса Kokoro: имя кодирует язык и пол (af_ -- amer. female и т.д.)."""
@@ -46,7 +55,11 @@ def kokoro_voices():
     from registry import ENGINES, is_ready
     out = []
     for eng in ("kokoro", "kokoro-ru"):
+        # Голоса показываем и до установки движка: иначе у нового человека
+        # выбирать не из чего, и непонятно, что вообще можно скачать.
         if not is_ready(eng):
+            имена = ИЗВЕСТНЫЕ_ГОЛОСА.get(eng, [])
+            out.extend(f"{eng}:{n}" for n in имена)
             continue
         try:
             from huggingface_hub import list_repo_files
@@ -55,7 +68,9 @@ def kokoro_voices():
                             for f in list_repo_files(repo)
                             if f.startswith("voices/") and f.endswith(".pt")})
         except Exception:
-            continue
+            # Список из сети недоступен (нет huggingface_hub в служебном
+            # интерпретаторе, нет сети) -- берём известные имена.
+            names = ИЗВЕСТНЫЕ_ГОЛОСА.get(eng, [])
         for n in names:
             if eng == "kokoro" and n[:1] not in "ab":
                 continue                      # прочие языки конвейер не ведёт
@@ -70,8 +85,13 @@ def apple_voices(lang=None):
     """Голоса системы. Хорошие (enhanced/premium) пользователь скачивает сам."""
     import subprocess
     here = os.path.dirname(os.path.abspath(__file__))
-    binary = os.path.join(os.path.dirname(here), "app", "appletts")
-    if not os.path.exists(binary):
+    root = os.path.dirname(here)
+    # Внутри бандла помощник лежит рядом с src/, при разработке -- в app/
+    for binary in (os.path.join(root, "appletts"),
+                   os.path.join(root, "app", "appletts")):
+        if os.path.exists(binary):
+            break
+    else:
         return []
     try:
         out = subprocess.run([binary, "--list"], capture_output=True,
@@ -375,14 +395,21 @@ def main():
     print(f"результат: {'аудиокнига и EPUB' if args.format == 'both' else ('аудиокнига' if args.format == 'm4b' else 'EPUB с подсветкой')}\n",
           flush=True)
 
-    engine_py = args.python
-    if kokoro:
-        sys.path.insert(0, os.path.join(HERE, "engines"))
-        from registry import env_python, is_ready
-        if not is_ready(kokoro[0]):
-            sys.exit(f"движок {kokoro[0]} не установлен: "
-                     f"python3 src/engines/install.py {kokoro[0]}")
-        engine_py = env_python(kokoro[0])
+    # narrate.py всегда исполняется интерпретатором своего движка: там
+    # стоят и библиотека синтеза, и ebooklib для разбора книги. Служебный
+    # интерпретатор приложения их не содержит и содержать не должен.
+    sys.path.insert(0, os.path.join(HERE, "engines"))
+    from registry import env_python, is_ready
+
+    движок = kokoro[0] if kokoro else ("apple" if apple else "qwen")
+    if not is_ready(движок):
+        print(f"ЭТАП ставлю движок {движок}", flush=True)
+        код = subprocess.call([sys.executable,
+                               os.path.join(HERE, "engines", "install.py"),
+                               движок])
+        if код != 0 or not is_ready(движок):
+            sys.exit(f"движок {движок} не установился")
+    engine_py = env_python(движок)
 
     narrate = [engine_py, os.path.join(HERE, "narrate.py"),
                "--epub", book, "--out", work,
@@ -420,7 +447,7 @@ def main():
         print("ЭТАП сборка книги с подсветкой", flush=True)
         # Озвучка добавляется в исходную книгу: вёрстка, картинки и стили
         # остаются на месте.
-        mo = [args.python, os.path.join(HERE, "mo.py"), "--out", work,
+        mo = [engine_py, os.path.join(HERE, "mo.py"), "--out", work,
               "--source", book, "--epub", final, "--speed", str(args.speed)]
         run_stage(mo, "сборка EPUB")
         commands.append(" ".join(mo))
@@ -428,7 +455,7 @@ def main():
 
     if args.format in ("m4b", "both"):
         print("ЭТАП сборка аудиокниги", flush=True)
-        asm = [args.python, os.path.join(HERE, "assemble.py"), "--out", work,
+        asm = [engine_py, os.path.join(HERE, "assemble.py"), "--out", work,
                "--title", title, "--m4b"]
         run_stage(asm, "сборка аудиокниги")
         commands.append(" ".join(asm))
