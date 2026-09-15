@@ -205,8 +205,12 @@ def synth_batch(chapters, parts, cmd, label):
         bar.update(1)
     bar.close()
     proc.wait()
-    if not сделано:
-        sys.exit(f"{label}: не озвучено ни одного фрагмента")
+    # Неполный синтез -- это сбой: иначе книга соберётся с половиной
+    # озвучки и отчитается как готовая. Сделанное остаётся на диске, и
+    # следующий запуск продолжит с места обрыва.
+    if сделано < len(tasks):
+        sys.exit(f"{label}: озвучено {сделано} из {len(tasks)} фрагментов, "
+                 f"прогон прерван — запустите снова, чтобы продолжить")
     return {}
 
 
@@ -251,8 +255,9 @@ def synth_stream(chapters, parts, cmd, label):
     bar.close()
     proc.stdin.close()
     proc.wait()
-    if tasks and not extra:
-        sys.exit(f"{label}: не озвучено ни одного фрагмента")
+    if len(extra) < len(tasks):
+        sys.exit(f"{label}: озвучено {len(extra)} из {len(tasks)} фрагментов, "
+                 f"прогон прерван — запустите снова, чтобы продолжить")
     return extra
 
 

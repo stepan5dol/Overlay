@@ -59,11 +59,18 @@ def main():
                                  ref_audio=args.ref_audio, ref_text=ref_text)])
 
     готово = 0
-    начало = time.time()
+    # Ждём не от начала прогона, а от последнего результата: иначе на
+    # длинной книге таймаут срабатывает посреди работы и помощник молча
+    # выходит, оставляя книгу наполовину озвученной.
+    последний_успех = time.time()
     while готово < len(задания):
         события = сессия.step()
-        if not события and time.time() - начало > 600:
-            break
+        if not события:
+            if time.time() - последний_успех > 600:
+                print(json.dumps({"id": "", "error": "движок молчит 10 минут"},
+                                 ensure_ascii=False), flush=True)
+                break
+            continue
         for ev in события:
             if not (ev.done or ev.error):
                 continue
@@ -76,6 +83,7 @@ def main():
                 sf.write(путь, звук, SR)
                 ответ = {"id": з["id"], "seconds": len(звук) / SR}
             готово += 1
+            последний_успех = time.time()
             print(json.dumps(ответ, ensure_ascii=False), flush=True)
 
 
