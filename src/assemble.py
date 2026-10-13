@@ -7,7 +7,7 @@ so the seam does not click.
 import argparse, json, os, subprocess, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tools import ffmpeg as найти_ffmpeg
+from tools import ffmpeg as найти_ffmpeg, прочитать_wav
 import numpy as np, soundfile as sf
 
 SR = 24000
@@ -38,10 +38,7 @@ def build_chapter(chunks, parts, ci):
         p = os.path.join(parts, f"{ci:04d}_{i:04d}.wav")
         if not os.path.exists(p):
             continue
-        y, _ = sf.read(p, dtype="float32")
-        if y.ndim > 1:
-            y = y.mean(axis=1)
-        pieces.append(y)
+        pieces.append(прочитать_wav(p, SR))
         pieces.append(np.zeros(int(SR * pause_after(text)), dtype=np.float32))
     return fade_join(pieces)
 

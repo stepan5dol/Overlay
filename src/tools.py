@@ -26,10 +26,25 @@ def найти(имя, внутри_бандла=None):
 
 
 def ffmpeg(root=None):
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
     свой = os.path.join(root, "Resources", "ffmpeg") if root else None
     p = найти("ffmpeg", свой)
     if not p:
-        raise RuntimeError(
-            "не найден ffmpeg — он нужен, чтобы упаковать звук.\n"
-            "Установите его: brew install ffmpeg")
+        from ui import т
+        raise RuntimeError(т("не найден ffmpeg"))
     return p
+
+
+def прочитать_wav(путь, sr=24000):
+    import numpy as np, soundfile as sf
+    y, исходная = sf.read(путь, dtype="float32")
+    if y.ndim > 1:
+        y = y.mean(axis=1)
+    if исходная != sr and len(y):
+        n = int(round(len(y) * sr / исходная))
+        y = np.interp(np.linspace(0, len(y) - 1, n), np.arange(len(y)), y).astype("float32")
+    return y

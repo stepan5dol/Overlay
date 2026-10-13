@@ -28,13 +28,15 @@ def main():
         sys.exit(f"голос {args.voice} неизвестен; есть: {', '.join(CHECKPOINTS)}")
 
     # ru_g2p и espeak-data лежат рядом с окружением движка
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(sys.executable))))
+    env = os.path.dirname(os.path.dirname(os.path.abspath(sys.executable)))
+    sys.path.insert(0, env)
     import torch, soundfile as sf
     from kokoro import KModel
     from huggingface_hub import hf_hub_download
     from ru_g2p import RuG2P
+    from espeak_data import короткий_путь
 
-    g2p = RuG2P()
+    g2p = RuG2P(espeak_data=короткий_путь(os.path.join(env, "espeak-data")))
     model = KModel(repo_id=REPO,
                    model=hf_hub_download(REPO, CHECKPOINTS[args.voice])).eval()
     pack = torch.load(hf_hub_download(REPO, f"voices/{args.voice}.pt"),

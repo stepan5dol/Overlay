@@ -9,12 +9,14 @@
 Сопоставление идёт по нормализованному тексту: фрагменты нарезались из
 "плоского" текста, а в разметке те же слова разбиты тегами.
 """
-import argparse, html, json, os, re, shutil, subprocess, sys, zipfile
+import argparse, html, json, os, re, shutil, subprocess, sys, unicodedata, zipfile
 import numpy as np
 import soundfile as sf
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tools import ffmpeg as найти_ffmpeg
+from tools import ffmpeg as найти_ffmpeg, прочитать_wav
+from narrate import ЗАМЕНЫ, ВЫБРОСИТЬ
+from ui import т
 
 SR = 24000
 NS = {"opf": "http://www.idpf.org/2007/opf",
@@ -27,9 +29,16 @@ def clock(s):
     return f"{int(h):02d}:{int(m):02d}:{sec:06.3f}"
 
 
+НЕ_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
 def нормализовать(t):
-    """Текст без разметки и лишних пробелов -- для сопоставления."""
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", t)).strip()
+    """Текст фрагмента без лишних пробелов -- для сопоставления.
+
+    Разметки во фрагменте нет: он взят из get_text(). Вырезать «теги» из
+    него нельзя -- так пропадало всё между «p < 0.05» и следующим «>».
+    """
+    return re.sub(r"\s+", " ", НЕ_XML.sub("", t)).strip()
 
 
 def развернуть(t):
@@ -37,7 +46,9 @@ def развернуть(t):
     return html.unescape(t)
 
 
-СЛУЖЕБНЫЕ = ("title", "head", "style", "script")
+# Нарезка выбрасывает то же самое (sup и sub -- номера сносок), иначе
+# «Motion Bank,11 launched» в разметке не совпадёт с озвученным фрагментом.
+СЛУЖЕБНЫЕ = ("title", "head") + ВЫБРОСИТЬ
 
 
 def тело(xhtml):
@@ -67,7 +78,9 @@ def текстовые_узлы(xhtml):
         имя = имя.group(1).lower() if имя else ""
         if m.start() > поз and not пропуск:
             узлы.append((поз, m.start(), xhtml[поз:m.start()]))
-        if имя in СЛУЖЕБНЫЕ:
+        if имя in СЛУЖЕБНЫЕ and not m.group(0).endswith("/>"):
+            # <link/> и <meta/> закрыты сами: считать их открытыми --
+            # потерять весь текст после них.
             пропуск += 0 if m.group(0).startswith("</") else 1
             if m.group(0).startswith("</"):
                 пропуск = max(0, пропуск - 1)
@@ -117,16 +130,30 @@ def разметить(xhtml, фрагменты, префикс):
     узлы = текстовые_узлы(xhtml)
     плоский, места = карта_текста(узлы)
 
-    сжатый, индексы = [], []
+    # Текст разметки чистится так же, как нарезка чистила фрагменты
+    # (narrate.clean_block). Каждый символ помнит первый и последний символ
+    # плоского текста, из которых он получился.
+    сжатый, начала, концы = [], [], []
     пробел = False
     for i, ch in enumerate(плоский):
+        ch = ЗАМЕНЫ.get(ch, ch)
+        if not ch:
+            continue
         if ch.isspace():
             if not пробел and сжатый:
-                сжатый.append(" "); индексы.append(i)
+                сжатый.append(" "); начала.append(i); концы.append(i)
             пробел = True
-        else:
-            сжатый.append(ch); индексы.append(i)
-            пробел = False
+            continue
+        пробел = False
+        if unicodedata.combining(ch) and сжатый:
+            # Нарезка приводит текст к NFC: «e» и отдельное ударение там --
+            # одна буква «é». Склеиваем так же, продлевая букву до знака.
+            слитно = unicodedata.normalize("NFC", сжатый[-1] + ch)
+            if len(слитно) == 1:
+                сжатый[-1] = слитно; концы[-1] = i
+                continue
+        for c in unicodedata.normalize("NFC", ch):
+            сжатый.append(c); начала.append(i); концы.append(i)
     сжатый = "".join(сжатый)
 
     границы = [(a, b) for a, b, _t in узлы]
@@ -134,19 +161,24 @@ def разметить(xhtml, фрагменты, префикс):
 
     for i, текст in enumerate(фрагменты):
         цель = нормализовать(текст)
+        # К заголовкам при нарезке дописывается точка -- ради паузы в
+        # синтезе. В разметке её нет, поэтому ищем без точки, а если в
+        # разметке она есть, забираем её в span. Искать сначала с точкой
+        # нельзя: для буквы «A» в указателе находилось «S.A.» через десять
+        # страниц, и всё между ними выпадало.
+        точка = цель.endswith(".")
+        if точка:
+            цель = цель[:-1]
         if not цель:
             continue
         k = сжатый.find(цель, поз)
-        if k < 0 and цель.endswith("."):
-            # К заголовкам при нарезке дописывается точка -- ради паузы в
-            # синтезе. В разметке её нет, поэтому ищем без неё.
-            цель = цель[:-1]
-            k = сжатый.find(цель, поз)
         if k < 0:
             continue
-        конец = min(k + len(цель), len(индексы))
-        a = места[индексы[k]][0]
-        b = места[индексы[конец - 1]][1]
+        конец = k + len(цель)
+        if точка and сжатый[конец:конец + 1] == ".":
+            конец += 1
+        a = места[начала[k]][0]
+        b = места[концы[конец - 1]][1]
         куски = разрезать_по_узлам(a, b, границы)
         if not куски:
             continue
@@ -185,10 +217,7 @@ def concat_chapter(chunks, parts, ci, fade_ms=8, words_by_id=None):
         p = os.path.join(parts, f"{ci:04d}_{i:04d}.wav")
         if not os.path.exists(p):
             continue
-        y, _ = sf.read(p, dtype="float32")
-        if y.ndim > 1:
-            y = y.mean(axis=1)
-        y = y.copy()
+        y = прочитать_wav(p, SR).copy()
         if len(y) > 2 * n:
             y[:n] *= np.linspace(0, 1, n)
             y[-n:] *= np.linspace(1, 0, n)
@@ -218,6 +247,7 @@ def main():
     # исходная книга целиком -- основа результата
     with zipfile.ZipFile(args.source) as z:
         z.extractall(staging)
+    вычистить(staging)
 
     opf_path = найти_opf(staging)
     base = os.path.dirname(opf_path)
@@ -292,6 +322,21 @@ def main():
     print(f"\n{args.epub}  ({общая/60:.1f} мин звука)")
 
 
+def вычистить(root):
+    for d, _, files in os.walk(root):
+        for f in files:
+            if not f.endswith((".xhtml", ".html", ".opf", ".ncx")):
+                continue
+            p = os.path.join(d, f)
+            try:
+                s = open(p, encoding="utf-8", newline="").read()
+            except UnicodeDecodeError:
+                continue
+            чисто = НЕ_XML.sub("", s)
+            if чисто != s:
+                open(p, "w", encoding="utf-8", newline="").write(чисто)
+
+
 def проверить(root):
     """Каждый изменённый файл должен остаться разбираемым XML.
 
@@ -313,8 +358,8 @@ def проверить(root):
         print("  ПОВРЕЖДЕНО:", file=sys.stderr)
         for x in плохие[:5]:
             print("   ", x, file=sys.stderr)
-        raise RuntimeError("книга собралась бы повреждённой: "
-                           + плохие[0].split(":", 1)[0])
+        raise RuntimeError(т("книга собралась бы повреждённой: {файл}",
+                             файл=плохие[0].split(":", 1)[0]))
 
 
 def найти_документ(root, имя):

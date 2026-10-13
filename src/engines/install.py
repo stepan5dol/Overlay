@@ -12,6 +12,8 @@ import argparse, json, os, subprocess, sys, venv
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from registry import ENGINES, PARSERS, env_dir, env_python, is_ready  # noqa: E402
+sys.path.insert(0, os.path.dirname(HERE))
+from ui import т  # noqa: E402
 
 # Разборщики PDF ставятся тем же способом, что и движки синтеза.
 ENGINES = {**ENGINES, **{k: {**v, "модели": [], "правки": [], "языки": []}
@@ -49,7 +51,8 @@ def bundled_python(engine):
     if системный:
         return системный
 
-    say("ОШИБКА", f"нет интерпретатора Python {want} для движка {engine}")
+    say("ОШИБКА", т("нет интерпретатора Python {версия} для движка {движок}",
+                     версия=want, движок=engine))
     sys.exit(1)
 
 
@@ -57,7 +60,7 @@ def make_env(engine):
     d = env_dir(engine)
     if os.path.exists(env_python(engine)):
         return
-    say("ШАГ", "создаю окружение")
+    say("ШАГ", т("создаю окружение"))
     os.makedirs(os.path.dirname(d), exist_ok=True)
     # venv из вложенного интерпретатора: системный Python не трогаем
     subprocess.run([bundled_python(engine), "-m", "venv", "--copies", d],
@@ -74,7 +77,7 @@ def install_packages(engine):
     lock = os.path.join(HERE, "requirements", f"{engine}.txt")
     if os.path.exists(lock):
         n = sum(1 for l in open(lock) if l.strip() and not l.startswith("#"))
-        say("ШАГ", f"ставлю библиотеки закреплённых версий ({n})")
+        say("ШАГ", т("ставлю библиотеки закреплённых версий ({n})", n=n))
         cmd = [env_python(engine), "-m", "pip", "install", "-q",
                "--disable-pip-version-check", "-r", lock]
         r = subprocess.run(cmd, capture_output=True, text=True)
@@ -86,7 +89,7 @@ def install_packages(engine):
     pkgs = ENGINES[engine]["пакеты"]
     if not pkgs:
         return
-    say("ШАГ", f"ставлю библиотеки ({len(pkgs)})")
+    say("ШАГ", т("ставлю библиотеки ({n})", n=len(pkgs)))
     cmd = [env_python(engine), "-m", "pip", "install", "-q",
            "--disable-pip-version-check", *pkgs]
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -113,7 +116,7 @@ def apply_patches(engine):
 
 def fetch_models(engine):
     for repo, size in ENGINES[engine]["модели"]:
-        say("ШАГ", f"скачиваю модель {repo} ({size:.2f} ГБ)")
+        say("ШАГ", т("скачиваю модель {repo} ({гб} ГБ)", repo=repo, гб=f"{size:.2f}"))
         code = ("from huggingface_hub import snapshot_download;"
                 f"snapshot_download({repo!r})")
         r = subprocess.run([env_python(engine), "-c", code],
@@ -126,7 +129,7 @@ def fetch_models(engine):
 def fetch_files(engine):
     """Отдельные файлы из репозитория модели -- например, свой фонемизатор."""
     for repo, name in ENGINES[engine].get("файлы", []):
-        say("ШАГ", f"беру {name}")
+        say("ШАГ", т("беру {имя}", имя=name))
         code = ("from huggingface_hub import hf_hub_download; import shutil, os;"
                 f"p=hf_hub_download({repo!r}, {name!r});"
                 f"shutil.copy(p, os.path.join({env_dir(engine)!r}, {name!r}))")
@@ -140,7 +143,7 @@ def fetch_files(engine):
 def fetch_dirs(engine):
     """Каталоги из репозитория модели -- данные, а не веса."""
     for repo, name in ENGINES[engine].get("каталоги", []):
-        say("ШАГ", f"беру {name}")
+        say("ШАГ", т("беру {имя}", имя=name))
         code = ("from huggingface_hub import snapshot_download; import shutil, os;"
                 f"p=snapshot_download({repo!r}, allow_patterns=[{name+'/*'!r}]);"
                 f"dst=os.path.join({env_dir(engine)!r}, {name!r});"
@@ -165,16 +168,20 @@ def main():
                          ensure_ascii=False))
         return
     if is_ready(args.engine):
-        say("ГОТОВ", "уже установлен")
+        say("ГОТОВ", т("уже установлен"))
         return
 
+    os.makedirs(env_dir(args.engine), exist_ok=True)
+    метка = os.path.join(env_dir(args.engine), ".installing")
+    open(метка, "w").close()
     make_env(args.engine)
     install_packages(args.engine)
     apply_patches(args.engine)
     fetch_models(args.engine)
     fetch_files(args.engine)
     fetch_dirs(args.engine)
-    say("ГОТОВ", ENGINES[args.engine]["название"])
+    os.remove(метка)
+    say("ГОТОВ", т(ENGINES[args.engine]["название"]))
 
 
 if __name__ == "__main__":

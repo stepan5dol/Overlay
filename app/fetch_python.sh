@@ -10,11 +10,9 @@
 # меняются, и угаданный номер даёт 404.
 set -e
 cd "$(dirname "$0")"
-NEED="3.10 3.12 3.13"
-API="https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
-
-INFO="$(curl -fsSL "$API")"
-TAG="$(echo "$INFO" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
+NEED="3.10 3.13"
+TAG="20260929"
+INFO="$(curl -fsSL "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/$TAG")"
 
 for short in $NEED; do
   dest="python/$short"
@@ -33,7 +31,7 @@ for a in d["assets"]:
     if m:
         подходящие.append((int(m.group(1)), a["name"]))
 print(max(подходящие)[1] if подходящие else "")')"
-  [ -n "$name" ] || { echo "  нет сборки для $short" >&2; continue; }
+  [ -n "$name" ] || { echo "  нет сборки для $short" >&2; exit 1; }
 
   tmp="$(mktemp -d)"
   echo "  качаю ${name%%+*}…"

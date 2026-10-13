@@ -1,24 +1,21 @@
 #!/bin/bash
-# Собирает Thorium.app. Приложение — тонкая оболочка: вся работа в src/book.py,
-# поэтому бандл должен лежать внутри репозитория (он ищет корень на два уровня вверх).
 set -e
 cd "$(dirname "$0")"
-APP="Overlay.app"
+OUT="${THORIUM_BUILD_DIR:-$(mktemp -d)}"
+APP="$OUT/Overlay.app"
 REPO="$(cd .. && pwd)"
-# В раздаваемом образе путь к каталогу разработчика не нужен: конвейер
-# лежит внутри бандла. Оставляем его только при сборке для себя.
 REPO_HINT="${THORIUM_KEEP_REPO_PATH:+$REPO}"
-# Интерпретатор для конвейера. По умолчанию -- окружение движка, которое
-# приложение создаёт само; переопределяется через THORIUM_PYTHON.
-# Интерпретатор указывает внутрь бандла; при разработке переопределяется
-# через THORIUM_PYTHON.
-# Служебный интерпретатор приложения -- на нём же ставятся движки.
 PYTHON="${THORIUM_PYTHON:-@BUNDLE@/python/3.13/bin/python3}"
+MIN_OS="14.0"
+
+[ -x python/3.10/bin/python3 ] && [ -x python/3.13/bin/python3 ] || ./fetch_python.sh
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 swiftc -O -parse-as-library Overlay.swift Settings.swift -o "$APP/Contents/MacOS/Overlay" \
-       -target arm64-apple-macos26.0
+       -target "arm64-apple-macos$MIN_OS"
+swiftc -O AppleTTS.swift -o appletts -target "arm64-apple-macos$MIN_OS"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -31,7 +28,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>LSMinimumSystemVersion</key><string>26.0</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>ru</string></array>
+  <key>LSMinimumSystemVersion</key><string>$MIN_OS</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>ThoriumRepoRoot</key><string>$REPO_HINT</string>
   <key>ThoriumPython</key><string>$PYTHON</string>
@@ -44,35 +43,26 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 
-[ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/"
+R="$APP/Contents/Resources"
+cp AppIcon.icns appletts "$R/"
+cp -R en.lproj ru.lproj "$R/"
+mkdir -p "$R/python" "$R/src" "$R/refs"
+for v in 3.10 3.13; do
+  rsync -a --exclude "__pycache__" "python/$v" "$R/python/"
+done
+rsync -a --exclude "__pycache__" --exclude "out" --exclude "*.pyc" ../src/ "$R/src/"
+rsync -a --exclude "vakhshtayn.*" ../refs/ "$R/refs/"
+cp ../README.md ../LICENSE "$R/"
 
-# Конвейер кладём внутрь приложения: снаружи он есть только на машине
-# разработчика, а бандл должен работать у всех.
-# Интерпретаторы внутри приложения: у каждого движка своя версия, а в macOS
-# есть только 3.9. Скачиваются через ./fetch_python.sh.
-if [ -d python ] && [ -n "$(ls -A python 2>/dev/null)" ]; then
-  rsync -a --exclude "__pycache__" python/ "$APP/Contents/Resources/python/"
-  echo "  интерпретаторы: $(ls python | tr '\n' ' ')"
-else
-  echo "  ВНИМАНИЕ: нет интерпретаторов, выполните ./fetch_python.sh" >&2
-fi
+xattr -cr "$APP"
+codesign --force --deep -s - "$APP"
+codesign --verify --deep --strict "$APP"
 
-mkdir -p "$APP/Contents/Resources/src" "$APP/Contents/Resources/refs"
-rsync -a --exclude "__pycache__" --exclude "out" --exclude "*.pyc" \
-      ../src/ "$APP/Contents/Resources/src/"
-rsync -a --exclude "vakhshtayn.*" ../refs/ "$APP/Contents/Resources/refs/"
-cp ../README.md ../LICENSE "$APP/Contents/Resources/" 2>/dev/null || true
-[ -f appletts ] && cp appletts "$APP/Contents/Resources/"
-codesign --force --deep -s - "$APP" 2>/dev/null || true
-# Ставим сразу: собранное, но не установленное приложение -- источник
-# путаницы, окно продолжает работать по старой версии.
 if [ "${THORIUM_NO_INSTALL:-}" != "1" ]; then
   pkill -x Overlay 2>/dev/null || true
   sleep 1
-  rm -rf "/Applications/$APP"
+  rm -rf /Applications/Overlay.app
   mv "$APP" /Applications/
-  echo "установлено: /Applications/$APP"
+  APP=/Applications/Overlay.app
 fi
-# Бандл перемещается, а не копируется: копия в репозитории давала второе
-# приложение с тем же именем в поиске Spotlight.
-echo "готово"
+echo "готово: $APP"

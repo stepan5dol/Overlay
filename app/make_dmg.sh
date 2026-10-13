@@ -1,40 +1,49 @@
 #!/bin/bash
-# Собирает DMG для раздачи. Приложение не подписано: сертификата Developer ID
-# нет, поэтому при первом запуске macOS его блокирует, и снимать карантин
-# приходится вручную -- команда есть в файле рядом с приложением.
 set -e
 cd "$(dirname "$0")"
-VERSION="${1:-0.1.0}"
-APP="/Applications/Overlay.app"
-[ -d "$APP" ] || { echo "нет $APP -- сначала ./build.sh"; exit 1; }
-
+VERSION="${1:?версия, например 0.1.5}"
 STAGE="$(mktemp -d)"
+THORIUM_NO_INSTALL=1 THORIUM_BUILD_DIR="$STAGE" ./build.sh
 NAME="Overlay-$VERSION-arm64.dmg"
 rm -f "../$NAME"
 
-cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 
-cat > "$STAGE/Прочти меня.txt" <<'TEXT'
-Overlay — книга с синхронной озвучкой.
+cat > "$STAGE/Read me — Прочти меня.txt" <<'TEXT'
+Overlay — a book that reads itself / книга с синхронной озвучкой
 
-УСТАНОВКА
-Перетащите Overlay в папку Applications.
+REQUIREMENTS
+  • Mac with Apple Silicon (M1 or newer), macOS 14 or later
+  • Internet on first use: voice engines download from inside the app
 
-ПЕРВЫЙ ЗАПУСК
-Приложение не подписано сертификатом Apple, поэтому macOS откажется его
-открыть. Это ожидаемо. Выполните в Терминале:
+INSTALL
+Drag Overlay into Applications.
+
+FIRST LAUNCH
+Overlay is not signed with an Apple Developer certificate, so macOS blocks it
+the first time. Open it once, then go to System Settings → Privacy & Security
+and click "Open Anyway". Or run in Terminal:
 
     xattr -dr com.apple.quarantine /Applications/Overlay.app
 
-После этого приложение открывается обычным двойным щелчком.
+—
 
-ЧТО ЕЩЁ НУЖНО
-  • macOS 26 или новее, Apple Silicon
-  • ffmpeg:  brew install ffmpeg
-  • голосовой движок — скачивается из самого приложения, в настройках
+ЧТО НУЖНО
+  • Mac на Apple Silicon (M1 и новее), macOS 14 или новее
+  • Интернет при первом запуске: голосовые движки скачиваются из приложения
 
-Исходный код: https://github.com/stepan5dol/Overlay
+УСТАНОВКА
+Перетащите Overlay в папку «Программы».
+
+ПЕРВЫЙ ЗАПУСК
+Приложение не подписано сертификатом Apple, поэтому в первый раз macOS его
+заблокирует. Откройте его один раз, затем зайдите в Системные настройки →
+Конфиденциальность и безопасность и нажмите «Всё равно открыть». Или
+выполните в Терминале:
+
+    xattr -dr com.apple.quarantine /Applications/Overlay.app
+
+https://github.com/stepan5dol/Overlay
 TEXT
 
 hdiutil create -volname "Overlay $VERSION" -srcfolder "$STAGE" \

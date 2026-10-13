@@ -12,23 +12,32 @@ be nothing but punctuation is dropped rather than sent to the model.
 import argparse, gc, json, os, re, subprocess, sys, unicodedata
 import multiprocessing as mp
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ui import т  # noqa: E402
+
 BLOCKS = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "dd", "dt"]
 SR = 24000
 PUNCT_ONLY = re.compile(r"^[\W\d_]+$", re.UNICODE)
+
+# Как текст чистится перед синтезом. mo.py ищет готовые фрагменты в разметке
+# и должен чистить её ровно так же, поэтому правила вынесены сюда, а не
+# повторены там: каждое расхождение -- предложение, которое звучит, но не
+# попадает в SMIL, и плеер его перескакивает.
+ЗАМЕНЫ = {"­": "", "​": "", "‌": "", "«": "“", "»": "”"}
+ВЫБРОСИТЬ = ("script", "style", "meta", "link", "sup", "sub")
 
 
 def clean_block(el):
     # no separator: inline tags must not introduce characters of their own
     t = unicodedata.normalize("NFC", el.get_text())
-    t = t.replace("­", "").replace("​", "").replace("‌", "")
-    t = t.replace("«", "“").replace("»", "”")
+    t = "".join(ЗАМЕНЫ.get(c, c) for c in t)
     return re.sub(r"\s+", " ", t).strip()
 
 
 def chapter_text(html):
     from bs4 import BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
-    for junk in soup(["script", "style", "meta", "link", "sup", "sub"]):
+    for junk in soup(list(ВЫБРОСИТЬ)):
         junk.extract()
     out = []
     for el in soup.find_all(BLOCKS):
@@ -88,6 +97,9 @@ def init(model_id, ref_audio, ref_text, voice=None, language="Russian",
          lang_code="ru"):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     import warnings; warnings.filterwarnings("ignore")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "engines"))
+    from espeak_data import укоротить_misaki
+    укоротить_misaki()
     from mlx_audio.tts.utils import load_model
     from mlx_audio.tts.generate import generate_audio
     W["model"] = load_model(model_id)
@@ -209,8 +221,9 @@ def synth_batch(chapters, parts, cmd, label):
     # озвучки и отчитается как готовая. Сделанное остаётся на диске, и
     # следующий запуск продолжит с места обрыва.
     if сделано < len(tasks):
-        sys.exit(f"{label}: озвучено {сделано} из {len(tasks)} фрагментов, "
-                 f"прогон прерван — запустите снова, чтобы продолжить")
+        sys.exit(т("{этап}: озвучено {сделано} из {всего} фрагментов, прогон прерван — "
+                   "запустите снова, чтобы продолжить",
+                   этап=т(label), сделано=сделано, всего=len(tasks)))
     return {}
 
 
@@ -256,8 +269,9 @@ def synth_stream(chapters, parts, cmd, label):
     proc.stdin.close()
     proc.wait()
     if len(extra) < len(tasks):
-        sys.exit(f"{label}: озвучено {len(extra)} из {len(tasks)} фрагментов, "
-                 f"прогон прерван — запустите снова, чтобы продолжить")
+        sys.exit(т("{этап}: озвучено {сделано} из {всего} фрагментов, прогон прерван — "
+                   "запустите снова, чтобы продолжить",
+                   этап=т(label), сделано=len(extra), всего=len(tasks)))
     return extra
 
 
@@ -270,7 +284,7 @@ def synth_apple(chapters, parts, voice, rate, limit=None):
     """
     binary = appletts_binary()
     if not binary:
-        sys.exit("не найден appletts; соберите его: app/build.sh")
+        sys.exit(т("не найден appletts; соберите его: app/build.sh"))
 
     tasks = []
     for ci, ch in enumerate(chapters):
@@ -352,7 +366,7 @@ def main():
         if models:
             args.model = models[0][0]
         elif args.engine != "apple":
-            sys.exit(f"для движка {args.engine} не задана модель")
+            sys.exit(т("для движка {движок} не задана модель", движок=args.engine))
     if args.engine == "qwen" and not args.voice and not (args.ref_audio and args.ref_text):
         ap.error("нужен либо --voice, либо пара --ref-audio/--ref-text")
     if args.engine == "apple":
@@ -472,25 +486,32 @@ def main():
         _sig.signal(_sig.SIGINT, _reap)
         atexit.register(lambda: [c.terminate() for c in mp.active_children()])
 
-        with mp.Pool(args.workers, initializer=init,
-                     initargs=(args.model, args.ref_audio, ref_text,
-                               args.voice, args.language, args.lang_code)) as pool:
+        from concurrent.futures import ProcessPoolExecutor
+        from concurrent.futures.process import BrokenProcessPool
+        with ProcessPoolExecutor(args.workers, mp_context=mp.get_context("spawn"),
+                                 initializer=init,
+                                 initargs=(args.model, args.ref_audio, ref_text,
+                                           args.voice, args.language,
+                                           args.lang_code)) as pool:
             from tqdm import tqdm
             # imap (не unordered): фрагменты идут по порядку глав, иначе
             # «глава 3 из 40» ничего не значит
-            bar = tqdm(pool.imap(synth, todo), total=len(todo),
+            bar = tqdm(pool.map(synth, todo), total=len(todo),
                        unit="чанк", ncols=88, smoothing=0.05,
                        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} "
                                   "[{elapsed}<{remaining}, {rate_fmt}]")
             failed, seen = 0, -1
-            for k, r in enumerate(bar):
-                if r is None:
-                    failed += 1
-                    bar.set_postfix_str(f"сбоев: {failed}")
-                ci = int(os.path.basename(todo[k][1]).split("_")[0])
-                if ci != seen:
-                    seen = ci
-                    print(f"ГЛАВА {ci + 1} {chapters[ci]['title'][:60]}", flush=True)
+            try:
+                for k, r in enumerate(bar):
+                    if r is None:
+                        failed += 1
+                        bar.set_postfix_str(f"сбоев: {failed}")
+                    ci = int(os.path.basename(todo[k][1]).split("_")[0])
+                    if ci != seen:
+                        seen = ci
+                        print(f"ГЛАВА {ci + 1} {chapters[ci]['title'][:60]}", flush=True)
+            except BrokenProcessPool:
+                sys.exit(т("синтез остановился: процесс движка аварийно завершился"))
             bar.close()
             if failed:
                 print(f"не озвучено чанков: {failed}", file=sys.stderr)

@@ -29,9 +29,11 @@ Everything runs locally on Apple Silicon. No cloud, no API keys.
 
 ## Requirements
 
-- macOS 26 or later, Apple Silicon
-- `ffmpeg` (`brew install ffmpeg`)
-- ~3 GB of disk per engine, downloaded on first use
+- Apple Silicon Mac (M1 or newer), macOS 14 or later
+- Internet on first use: each engine (~1–3 GB) downloads from inside the app
+
+Nothing else: Python, ffmpeg and the libraries come with the app or with
+the engine.
 
 ## Install
 
@@ -39,20 +41,24 @@ Download the DMG from [Releases](../../releases), or build it yourself:
 
 ```sh
 git clone https://github.com/stepan5dol/Overlay
-cd overlay
-app/build.sh
+cd Overlay
+app/build.sh          # needs Xcode Command Line Tools: xcode-select --install
 ```
+
+`build.sh` downloads the bundled Python interpreters on first run, builds the
+app and installs it into `/Applications`. `app/make_dmg.sh 0.1.5` builds a DMG.
 
 ## Command line
 
 ```sh
-python3 src/book.py BOOK.epub                    # or BOOK.pdf
-python3 src/book.py BOOK.epub --voice sveta --format both
-python3 src/book.py --list-voices
+PY=/Applications/Overlay.app/Contents/Resources/python/3.13/bin/python3
+$PY src/book.py --list-voices
+$PY src/book.py BOOK.epub --language en --voice kokoro:af_heart
+$PY src/book.py BOOK.pdf  --language ru --voice kokoro-ru:sveta --format both
 ```
 
-Nothing is required beyond the file itself: the language is detected from the
-book, a matching voice is picked, and missing engines are installed on demand.
+Language and voice are always given explicitly. Missing engines are installed
+on demand.
 
 ## Voice samples
 
@@ -70,4 +76,5 @@ with its exact transcript into `refs/`.
 
 The code here is MIT. The models and libraries it downloads have their own:
 Qwen3-TTS and Kokoro under Apache 2.0, `kokoro-ru` weights under OpenRAIL,
-`ffmpeg` under GPL (used as an external binary, not linked).
+`ffmpeg` comes from [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg)
+and is used as an external binary, not linked.

@@ -5,11 +5,32 @@ import AppKit
 // Оболочка над src/book.py: книга на входе, EPUB с синхронной озвучкой на выходе.
 // Вся работа делается конвейером, здесь только выбор файла, ход работы и результат.
 
+let языкИнтерфейса = Bundle.main.preferredLocalizations.first == "ru" ? "ru" : "en"
+
+func окружениеКонвейера() -> [String: String] {
+    var env = ProcessInfo.processInfo.environment
+    env["OVERLAY_UI_LANG"] = языкИнтерфейса
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONNOUSERSITE"] = "1"
+    return env
+}
+
+extension View {
+    @ViewBuilder func стекло() -> some View {
+        if #available(macOS 26.0, *) { buttonStyle(.glass) } else { buttonStyle(.bordered) }
+    }
+
+    @ViewBuilder func стеклоЯркое() -> some View {
+        if #available(macOS 26.0, *) { buttonStyle(.glassProminent) }
+        else { buttonStyle(.borderedProminent) }
+    }
+}
+
 final class Runner: ObservableObject {
     @Published var running = false
     @Published var done: Int = 0
     @Published var total: Int = 0
-    @Published var stage: String = "Перетащите книгу в окно"
+    @Published var stage: String = String(localized: "Перетащите книгу в окно")
     @Published var log: String = ""
     @Published var result: String? = nil
     @Published var results: [String] = []
@@ -27,12 +48,12 @@ final class Runner: ObservableObject {
         let per = Date().timeIntervalSince(s) / Double(done)
         let left = per * Double(total - done)
         let m = Int(left) / 60, sec = Int(left) % 60
-        return m > 0 ? "≈ \(m) мин \(sec) с" : "≈ \(sec) с"
+        return m > 0 ? String(localized: "≈ \(m) мин \(sec) с") : String(localized: "≈ \(sec) с")
     }
 
     private var task: Process?
     private var stopped = false
-    private var lastStage = "синтез"
+    private var lastStage = String(localized: "синтез")
     @Published var failure: String? = nil
 
     @Published var voices: [(String, String, String)] = []
@@ -46,6 +67,7 @@ final class Runner: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: python)
         p.arguments = [repoRoot + "/src/book.py", "--list-voices"]
+        p.environment = окружениеКонвейера()
         let pipe = Pipe(); p.standardOutput = pipe
         do { try p.run() } catch { return }
         let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
@@ -113,14 +135,13 @@ final class Runner: ObservableObject {
         running = true; done = 0; total = 0; result = nil; results = []
         chapter = 0; chapters = 0; startedAt = Date()
         assembling = false; stats = [:]; resumed = false
-        log = ""; stage = "Разбор книги…"
+        log = ""; stage = String(localized: "Разбор книги…")
 
         let root = repoRoot
         let p = Process()
         p.executableURL = URL(fileURLWithPath: python)
-        var argv = [root + "/src/book.py", book]
-        if language != "auto" { argv += ["--language", language] }
-        if !voice.isEmpty { argv += ["--voice", voice] }
+        p.environment = окружениеКонвейера()
+        var argv = [root + "/src/book.py", book, "--language", language, "--voice", voice]
         if abs(speed - 1.0) > 0.001 { argv += ["--speed", String(format: "%.2f", speed)] }
         argv += ["--format", format, "--batch", String(batch)]
         if !dest.isEmpty { argv += ["--dest", dest] }
@@ -140,19 +161,20 @@ final class Runner: ObservableObject {
                 guard let self else { return }
                 self.running = false
                 if proc.terminationStatus == 0 && !self.results.isEmpty {
-                    self.stage = "Готово"
+                    self.stage = String(localized: "Готово")
                 } else if self.stopped {
-                    self.stage = "Остановлено. Работа сохранена — перетащите книгу снова, чтобы продолжить"
+                    self.stage = String(localized: "Остановлено. Работа сохранена — перетащите книгу снова, чтобы продолжить")
                 } else if let f = self.failure {
                     self.stage = f
                 } else {
-                    self.stage = "Прервалось на этапе «\(self.lastStage)». Работа сохранена — перетащите книгу снова"
+                    self.stage = String(localized: "Прервалось на этапе «\(self.lastStage)». Работа сохранена — перетащите книгу снова")
                 }
             }
         }
         task = p
         do { try p.run() } catch {
-            running = false; stage = "Не удалось запустить: \(error.localizedDescription)"
+            running = false
+            stage = String(localized: "Не удалось запустить: \(error.localizedDescription)")
         }
     }
 
@@ -164,7 +186,7 @@ final class Runner: ObservableObject {
         if gid > 0 { killpg(gid, SIGTERM) } else { p.terminate() }
         stopped = true
         running = false
-        stage = "Остановлено"
+        stage = String(localized: "Остановлено")
     }
 
     private func absorb(_ chunk: String) {
@@ -179,8 +201,8 @@ final class Runner: ObservableObject {
                 if nums.count == 2, let d = Int(nums[0]), let t = Int(nums[1]), t > 0 {
                     done = d; total = t
                     stage = chapters > 1
-                        ? "Глава \(chapter) из \(chapters) · фрагмент \(d) из \(t)"
-                        : "Фрагмент \(d) из \(t)"
+                        ? String(localized: "Глава \(chapter) из \(chapters) · фрагмент \(d) из \(t)")
+                        : String(localized: "Фрагмент \(d) из \(t)")
                 }
             }
             if line.hasPrefix("ПРОДОЛЖАЮ ") { resumed = true }
@@ -213,7 +235,8 @@ final class Runner: ObservableObject {
                 results.append(path)
                 result = path
             }
-            if line.hasPrefix("язык:") || line.hasPrefix("голос:") || line.hasPrefix("книга:") {
+            if ["язык:", "голос:", "книга:", "language:", "voice:", "book:"]
+                .contains(where: line.hasPrefix) {
                 stage = line
             }
             log += line + "\n"
@@ -254,7 +277,7 @@ struct DropZone: View {
                 Text("EPUB или PDF").font(.caption).foregroundStyle(.tertiary)
             }
             Button("Выбрать файл…") { pick() }
-                .buttonStyle(.glass)
+                .стекло()
                 .controlSize(.large)
         }
         .frame(maxWidth: .infinity)
@@ -290,7 +313,7 @@ struct DropZone: View {
 
 struct ContentView: View {
     @StateObject private var runner = Runner()
-    @AppStorage("language") private var language = "auto"
+    @AppStorage("language") private var language = языкИнтерфейса
     @AppStorage("voice") private var voice = ""
     @AppStorage("speed") private var speed = 1.0
     @AppStorage("format") private var format = "epub"
@@ -314,14 +337,24 @@ struct ContentView: View {
     }
 
     /// Голоса, подходящие выбранному языку. Пустой язык у голоса значит
-    /// «годится для любого»; «Определить по книге» показывает все.
+    /// «годится для любого».
     private func подходят(_ список: [(String, String, String)])
         -> [(String, String, String)] {
-        guard language != "auto" else { return список }
-        return список.filter { $0.2.isEmpty || $0.2 == language }
+        список.filter { $0.2.isEmpty || $0.2 == language }
+    }
+
+    private func поправитьВыбор() {
+        if language != "ru" && language != "en" { language = языкИнтерфейса }
+        let все = подходят(runner.fast) + подходят(runner.system)
+            + подходят(runner.presets) + подходят(runner.voices)
+        guard !все.isEmpty, !все.contains(where: { $0.0 == voice }) else { return }
+        let свой = language == "ru" ? "kokoro-ru:sveta" : "kokoro:af_heart"
+        voice = все.contains(where: { $0.0 == свой }) ? свой : все[0].0
     }
 
     private func start(_ path: String) {
+        поправитьВыбор()
+        guard !voice.isEmpty else { return }
         runner.run(book: path, language: language, voice: voice, speed: speed,
                    format: format, dest: destPath, batch: batch)
     }
@@ -342,7 +375,6 @@ struct ContentView: View {
             VStack(spacing: 14) {
                 row("Язык") {
                     Picker("", selection: $language) {
-                        Text("Определить по книге").tag("auto")
                         Text("Русский").tag("ru")
                         Text("English").tag("en")
                     }.labelsHidden().pickerStyle(.menu)
@@ -350,13 +382,6 @@ struct ContentView: View {
                 Divider().opacity(0.5)
                 row("Голос") {
                     Picker("", selection: $voice) {
-                        // Пункт по умолчанию -- в своей секции: иначе при
-                        // выбранном пустом значении SwiftUI рисует его
-                        // безымянной полосой посреди групп.
-                        Section {
-                            Text("Выбрать автоматически").tag("")
-                        }
-
                         if !подходят(runner.voices).isEmpty {
                             Section("Клонирование по образцу") {
                                 ForEach(подходят(runner.voices), id: \.0) { v in
@@ -399,10 +424,7 @@ struct ContentView: View {
                     HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        Text("Выбран голос базового качества. Улучшенные Apple не "
-                             + "разрешает скачивать из приложений — только вручную, "
-                             + "в разделе «Устный контент». Голоса Siri сторонним "
-                             + "приложениям недоступны вовсе.")
+                        Text("Выбран голос базового качества. Улучшенные Apple не разрешает скачивать из приложений — только вручную, в разделе «Устный контент». Голоса Siri сторонним приложениям недоступны вовсе.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -421,9 +443,10 @@ struct ContentView: View {
             }
         }
         .disabled(runner.running)
+        .onChange(of: language) { поправитьВыбор() }
     }
 
-    private func row<C: View>(_ label: String, @ViewBuilder _ control: () -> C) -> some View {
+    private func row<C: View>(_ label: LocalizedStringKey, @ViewBuilder _ control: () -> C) -> some View {
         HStack {
             Text(label).font(.callout).foregroundStyle(.secondary)
                 .frame(width: 62, alignment: .leading)
@@ -437,10 +460,10 @@ struct ContentView: View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(runner.assembling ? "Сборка"
-                         : (runner.total > 0
-                            ? "\(Int(Double(runner.done) / Double(runner.total) * 100))%"
-                            : "…"))
+                    (runner.assembling ? Text("Сборка")
+                         : Text(verbatim: runner.total > 0
+                                ? "\(Int(Double(runner.done) / Double(runner.total) * 100))%"
+                                : "…"))
                         .font(.system(size: 30, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .contentTransition(.numericText())
@@ -485,15 +508,15 @@ struct ContentView: View {
         if let sec = s["секунды"], sec > 0 {
             let h = Int(sec) / 3600, m = (Int(sec) % 3600) / 60
             let ss = Int(sec) % 60
-            if h > 0 { parts.append("\(h) ч \(m) мин") }
-            else if m > 0 { parts.append("\(m) мин \(ss) с") }
-            else { parts.append("\(ss) с") }
+            if h > 0 { parts.append(String(localized: "\(h) ч \(m) мин")) }
+            else if m > 0 { parts.append(String(localized: "\(m) мин \(ss) с")) }
+            else { parts.append(String(localized: "\(ss) с")) }
         }
         if let w = s["слова"], w > 0 {
-            parts.append("\(Int(w)) слов")
+            parts.append(String(localized: "\(Int(w)) слов"))
         }
         if let ch = s["главы"], ch > 1 {
-            parts.append("\(Int(ch)) глав")
+            parts.append(String(localized: "\(Int(ch)) глав"))
         }
         if let b = s["байты"], b > 0 {
             parts.append(ByteCountFormatter.string(fromByteCount: Int64(b),
@@ -525,7 +548,7 @@ struct ContentView: View {
                     if !urls.isEmpty {
                         NSWorkspace.shared.activateFileViewerSelecting(urls)
                     }
-                }.buttonStyle(.glassProminent)
+                }.стеклоЯркое()
             }
         }
     }
@@ -574,18 +597,18 @@ struct ContentView: View {
                 Spacer()
                 if runner.running {
                     Button("Остановить", role: .destructive) { runner.stop() }
-                        .buttonStyle(.glass)
+                        .стекло()
                 } else if runner.result != nil {
                     Button("Ещё книгу") {
                         runner.result = nil
-                        runner.stage = "Перетащите книгу в окно"
-                    }.buttonStyle(.glass)
+                        runner.stage = String(localized: "Перетащите книгу в окно")
+                    }.стекло()
                 }
             }
 
             if showLog {
                 ScrollView {
-                    Text(runner.log.isEmpty ? "пока пусто" : runner.log)
+                    (runner.log.isEmpty ? Text("пока пусто") : Text(verbatim: runner.log))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -603,7 +626,10 @@ struct ContentView: View {
         .background(.background)
         .animation(.smooth(duration: 0.25), value: runner.running)
         .animation(.smooth(duration: 0.25), value: runner.result)
-        .task { runner.loadVoices() }
+        .task {
+            runner.loadVoices()
+            поправитьВыбор()
+        }
     }
 }
 

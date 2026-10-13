@@ -48,6 +48,7 @@ final class Хозяйство: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: python)
         p.arguments = [repoRoot + "/src/engines/status.py"]
+        p.environment = окружениеКонвейера()
         let pipe = Pipe(); p.standardOutput = pipe
         do { try p.run() } catch { return }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
@@ -59,10 +60,11 @@ final class Хозяйство: ObservableObject {
 
     func поставить(_ имя: String) {
         guard ставится == nil else { return }
-        ставится = имя; шаг = "готовлю окружение…"
+        ставится = имя; шаг = String(localized: "готовлю окружение…")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: python)
         p.arguments = [repoRoot + "/src/engines/install.py", имя]
+        p.environment = окружениеКонвейера()
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         pipe.fileHandleForReading.readabilityHandler = { h in
             let s = String(data: h.availableData, encoding: .utf8) ?? ""
@@ -118,9 +120,7 @@ struct SettingsView: View {
                     Text("32").tag(32)
                     Text("64").tag(64)
                 }.labelsHidden().pickerStyle(.segmented)
-                Text("Сколько фрагментов Qwen считает за раз. Больше — быстрее "
-                     + "и больше памяти. На M4 Pro: 8 даёт около 7×, 32 — около 9×. "
-                     + "На машинах помощнее имеет смысл поднять.")
+                Text("Сколько фрагментов Qwen считает за раз. Больше — быстрее и больше памяти. На M4 Pro: 8 даёт около 7×, 32 — около 9×. На машинах помощнее имеет смысл поднять.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } header: { Text("Размер пакета") }
@@ -159,8 +159,8 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Text(д.установлен
-                                 ? String(format: "на диске %.1f ГБ", д.гб_на_диске)
-                                 : String(format: "скачать около %.1f ГБ", д.гб_скачать))
+                                 ? String(format: String(localized: "на диске %.1f ГБ"), д.гб_на_диске)
+                                 : String(format: String(localized: "скачать около %.1f ГБ"), д.гб_скачать))
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
                         Spacer()
@@ -173,7 +173,7 @@ struct SettingsView: View {
                             }.frame(width: 150, alignment: .trailing)
                         } else if !д.установлен {
                             Button("Скачать") { хозяйство.поставить(д.имя) }
-                                .buttonStyle(.glassProminent)
+                                .стеклоЯркое()
                                 .disabled(хозяйство.ставится != nil)
                         }
                     }
@@ -186,7 +186,7 @@ struct SettingsView: View {
         }
     }
 
-    private func Ярлык(_ t: String) -> some View {
+    private func Ярлык(_ t: LocalizedStringKey) -> some View {
         Text(t).font(.caption2)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(Color.accentColor.opacity(0.15)))
@@ -221,7 +221,7 @@ enum ОкноНастроек {
             contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered, defer: false)
-        w.title = "Настройки"
+        w.title = String(localized: "Настройки")
         w.isReleasedWhenClosed = false
         w.center()
         w.contentView = NSHostingView(rootView: SettingsView())

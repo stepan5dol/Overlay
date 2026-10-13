@@ -4,6 +4,8 @@ import json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from registry import ENGINES, PARSERS, env_dir, is_ready   # noqa: E402
+sys.path.insert(0, os.path.dirname(HERE))
+from ui import т   # noqa: E402
 
 
 def размер(путь):
@@ -26,8 +28,8 @@ def main():
         готов = is_ready(имя)
         вывод.append({
             "имя": имя,
-            "название": оп.get("название", имя),
-            "описание": оп.get("описание", ""),
+            "название": т(оп.get("название", имя)),
+            "описание": т(оп.get("описание", "")),
             "установлен": готов,
             "гб_на_диске": round(размер(d) / 2**30, 2) if готов else 0,
             "гб_скачать": оп.get("вес") or round(

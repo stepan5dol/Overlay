@@ -48,16 +48,20 @@ EPUB → EPUB 3 с media overlay: синхронная озвучка, подс�
 
 ## Как пользоваться
 
-Приложение в `/Applications/Overlay.app`: перетащить книгу в окно —
-получить EPUB с синхронной озвучкой. Язык определяется по книге, голос
-подбирается под язык, правка `mlx-audio` применяется сама.
+Приложение в `/Applications/Overlay.app`: выбрать язык и голос, перетащить
+книгу в окно — получить EPUB с синхронной озвучкой.
+
+Нужно: Mac на Apple Silicon, macOS 14 или новее, интернет при первом запуске
+движка. Python, ffmpeg и библиотеки приезжают с приложением или с движком.
 
 То же из командной строки:
 
-    python3 src/book.py КНИГА.epub
+    PY=/Applications/Overlay.app/Contents/Resources/python/3.13/bin/python3
+    $PY src/book.py --list-voices
+    $PY src/book.py КНИГА.epub --language ru --voice kokoro-ru:sveta
 
-Обязательных настроек нет. Необязательные: `--only N` (одна глава),
-`--limit-chunks N`, `--workers N`, `--language ru|en`.
+`--language` и `--voice` обязательны. Необязательные: `--only N` (одна глава),
+`--limit-chunks N`, `--workers N`, `--format epub|m4b|both`.
 
 Синтез возобновляемый: готовые фрагменты пропускаются, прерванный прогон
 продолжается с места остановки.

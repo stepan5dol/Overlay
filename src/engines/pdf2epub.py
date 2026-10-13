@@ -4,11 +4,19 @@
 неё так же, как в любой другой EPUB.
 
 Разбирает docling: он размечает страницу моделью и отделяет тело от
-колонтитулов, а картинки отдаёт вместе с подписями. Распознавание текста
-на изображениях отключено -- в книге есть текстовый слой, а стоит оно
-десятикратного замедления.
+колонтитулов, а картинки отдаёт вместе с подписями. Страницы без
+текстового слоя -- сканы -- распознаёт Vision, встроенный в macOS.
+Страницы с текстом идут без распознавания: там оно ничего не добавляет,
+а стоит десятикратного замедления.
 """
 import argparse, base64, html, io, json, os, re, sys, uuid, zipfile
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ui import т  # noqa: E402
+
+# Код выхода «текста нет вообще»: book.py превращает его в понятную
+# строку для окна вместо общего «не удалось разобрать PDF».
+НЕТ_ТЕКСТА = 3
 
 СТИЛЬ = """body { font: 1.05rem/1.65 Georgia, serif; margin: 1.2rem; }
 h1, h2, h3 { line-height: 1.25; }
@@ -18,28 +26,100 @@ figcaption { font-size: .85rem; color: #555; margin-top: .4rem; }
 span.-epub-media-overlay-active { background: #ffe9a8; }"""
 
 
+def сканы(pdf):
+    """Для каждой страницы: скан ли она, то есть нужно ли её распознавать.
+
+    Скан -- страница, почти целиком занятая картинкой, на которой почти
+    нет текста. «Почти» -- потому что библиотеки вроде JSTOR штампуют
+    поверх сканов строку «downloaded from ...» текстовым слоем. Обложка
+    или вклейка с фотографией в обычной книге тоже сюда попадёт, но это
+    одна страница, а не вся книга.
+    """
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+    док = pdfium.PdfDocument(pdf)
+    итог = []
+    for i in range(len(док)):
+        стр = док[i]
+        ш, в = стр.get_size()
+        площадь = 0.0
+        for о in стр.get_objects(filter=[raw.FPDF_PAGEOBJ_IMAGE], max_depth=3):
+            л, н, п, вр = о.get_bounds()
+            площадь += max(0.0, п - л) * max(0.0, вр - н)
+        знаков = len("".join(стр.get_textpage().get_text_range().split()))
+        итог.append(площадь >= 0.5 * ш * в and знаков < 300)
+    return итог
+
+
+def отрезки(флаги):
+    """Подряд идущие страницы с одним флагом: [(первая, последняя, флаг)], с единицы."""
+    out = []
+    for i, ф in enumerate(флаги, 1):
+        if out and out[-1][2] == ф:
+            out[-1][1] = i
+        else:
+            out.append([i, i, ф])
+    return out
+
+
 def разобрать(pdf, ocr=False):
+    """PDF -> документы docling, по одному на отрезок страниц.
+
+    Сканы и страницы с текстом разбираются раздельно: распознавание
+    включено только там, где без него страница пуста, и книга с одной
+    картинкой на обложке не замедляется целиком.
+    """
     from docling.document_converter import DocumentConverter, PdfFormatOption
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, OcrMacOptions
+    from docling.datamodel.backend_options import ThreadedDoclingParseBackendOptions
     from docling.datamodel.base_models import InputFormat
-    o = PdfPipelineOptions()
-    o.generate_picture_images = True
-    o.do_ocr = ocr
-    conv = DocumentConverter(format_options={
-        InputFormat.PDF: PdfFormatOption(pipeline_options=o)})
-    return conv.convert(pdf).document
+
+    def конвертер(распознавать):
+        o = PdfPipelineOptions()
+        o.generate_picture_images = True
+        o.do_ocr = распознавать
+        бэкенд = None
+        if распознавать:
+            # Оба языка сразу: язык книги определяется потом, по готовому
+            # тексту. Проверено -- с таким списком Vision не путает
+            # кириллицу с латиницей ни в русском, ни в английском скане.
+            o.ocr_options = OcrMacOptions(lang=["ru-RU", "en-US"])
+            # Docling рисует страницы в 72 dpi и для распознавания растягивает
+            # их до 216: Vision читает размытые буквы. Рисуем сразу в 216 --
+            # на 10 страницах Latour ошибок 11 вместо 23, время то же.
+            бэкенд = ThreadedDoclingParseBackendOptions(
+                render_scale=o.ocr_options.scale)
+        return DocumentConverter(format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=o,
+                                             backend_options=бэкенд)})
+
+    флаги = сканы(pdf)
+    if ocr:
+        флаги = [True] * len(флаги)
+    if any(флаги):
+        print("ЭТАП " + т("распознаю текст: страниц без текстового слоя {n} из {всего}",
+                          n=sum(флаги), всего=len(флаги)), flush=True)
+    конвертеры, доки = {}, []
+    for первая, последняя, распознавать in отрезки(флаги):
+        if распознавать not in конвертеры:
+            конвертеры[распознавать] = конвертер(распознавать)
+        доки.append(конвертеры[распознавать].convert(
+            pdf, page_range=(первая, последняя)).document)
+    return доки
 
 
-def собрать_html(doc, картинки):
-    """Документ docling -> XHTML по главам.
+def собрать_html(доки, картинки):
+    """Документы docling -> XHTML по главам.
 
     Главы режутся по заголовкам первого уровня; если их нет -- вся книга
-    одной главой, потом её всё равно поделит нарезка на фрагменты.
+    одной главой, потом её всё равно поделит нарезка на фрагменты. Отрезки
+    страниц идут подряд, и глава, начатая в одном, продолжается в другом.
     """
     from docling_core.types.doc import DocItemLabel
     главы, текущая = [], {"заголовок": None, "куски": []}
 
-    for элемент, _ in doc.iterate_items():
+    for doc, элемент in ((doc, э) for doc in доки
+                         for э, _ in doc.iterate_items()):
         м = getattr(элемент, "label", None)
         текст = (getattr(элемент, "text", "") or "").strip()
 
@@ -121,6 +201,11 @@ def собрать_html(doc, картинки):
 </section></body></html>
 """
 
+# Символы, которых XML не допускает вовсе. Попадаются в мусорном текстовом
+# слое под схемами (в Latour -- \x01): с ними глава не разбирается, и
+# проверка бракует всю книгу.
+НЕ_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+
 
 def записать(главы, картинки, dst, название, lang):
     bid = "urn:uuid:" + str(uuid.uuid4())
@@ -129,9 +214,10 @@ def записать(главы, картинки, dst, название, lang):
 
     for i, гл in enumerate(главы):
         имя = f"text/ch{i:04d}.xhtml"
-        заголовок = гл["заголовок"] or f"Часть {i + 1}"
+        заголовок = НЕ_XML.sub("", гл["заголовок"] or f"Часть {i + 1}")
         файлы[имя] = ШАБЛОН.format(title=html.escape(заголовок[:70]),
-                                   body="\n".join(гл["куски"]), lang=lang)
+                                   body=НЕ_XML.sub("", "\n".join(гл["куски"])),
+                                   lang=lang)
         манифест.append(f'<item id="ch{i}" href="{имя}" '
                         f'media-type="application/xhtml+xml"/>')
         spine.append(f'<itemref idref="ch{i}"/>')
@@ -212,7 +298,7 @@ def проверить(epub):
     if беды:
         for b in беды[:5]:
             print("  ПОВРЕЖДЕНО:", b, file=sys.stderr)
-        raise RuntimeError(f"книга собралась бы битой ({len(беды)})")
+        raise RuntimeError(т("книга собралась бы битой ({n})", n=len(беды)))
 
 
 def main():
@@ -222,18 +308,31 @@ def main():
     ap.add_argument("--lang", default="en")
     ap.add_argument("--title")
     ap.add_argument("--ocr", action="store_true",
-                    help="распознавать текст на картинках (в десять раз дольше)")
+                    help="распознавать все страницы, а не только сканы")
     args = ap.parse_args()
 
-    print("ЭТАП разбор PDF", flush=True)
-    doc = разобрать(args.pdf, args.ocr)
+    print("ЭТАП " + т("разбор PDF"), flush=True)
+    доки = разобрать(args.pdf, args.ocr)
     картинки = {}
-    главы = собрать_html(doc, картинки)
+    главы = собрать_html(доки, картинки)
+    слов = sum(len(re.sub(r"<[^>]+>", " ", "".join(
+        к for к in г["куски"] if not к.startswith("<figure"))).split())
+        for г in главы)
+    if not слов:
+        # Книга из одних картинок дальше молча собралась бы без озвучки, а
+        # пустой EPUB ещё и остался бы в кэше вместо следующей попытки.
+        print("в PDF не нашлось текста: ни текстового слоя, ни распознаваемого",
+              file=sys.stderr)
+        sys.exit(НЕТ_ТЕКСТА)
     название = args.title or os.path.splitext(os.path.basename(args.pdf))[0]
     записать(главы, картинки, args.out, название, args.lang)
-    проверить(args.out)
-    слов = sum(len(re.sub(r"<[^>]+>", " ", "".join(г["куски"])).split())
-               for г in главы)
+    try:
+        проверить(args.out)
+    except RuntimeError:
+        # Иначе битая книга осталась бы в кэше, и следующий запуск взял бы
+        # её как готовую.
+        os.remove(args.out)
+        raise
     print(f"{args.out}  (глав {len(главы)}, картинок {len(картинки)}, "
           f"слов {слов})")
 

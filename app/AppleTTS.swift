@@ -65,6 +65,8 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
         while !finished && Date() < deadline {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02))
         }
+        if #available(macOS 15.0, *) { file?.close() }
+        file = nil
         let total = rate > 0 ? Double(frames) / rate : 0
         if let p = pending {                       // последнее слово закрываем концом
             words.append(["begin": p.begin, "end": total, "text": p.text,

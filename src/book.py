@@ -1,17 +1,10 @@
-"""Книга на входе — EPUB с media overlay на выходе.
-
-Язык определяется по самой книге, референс подбирается под язык, правка
-mlx-audio применяется сама. Никаких обязательных настроек: всё, что можно
-вывести из книги, выводится из неё.
-
-Прогресс печатается строками вида `ПРОГРЕСС n/N`, чтобы поверх можно было
-надеть интерфейс.
-"""
-import argparse, json, os, re, signal, subprocess, sys, unicodedata
+"""Книга на входе — EPUB с media overlay на выходе."""
+import argparse, json, os, re, signal, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import state as st
+from ui import т
 
 # Рабочие файлы -- в каталоге данных пользователя, а не рядом с кодом:
 # приложение живёт в /Applications, куда писать нельзя, и прогоны попадали
@@ -20,10 +13,7 @@ import state as st
 ROOT = os.path.dirname(HERE)
 REFS = os.path.join(ROOT, "refs")
 
-REFERENCE = {                       # язык -> голос по умолчанию, пара wav/txt в refs/
-    "ru": "vakhshtayn",
-    "en": "linda_johnson",
-}
+ЯЗЫКИ = ("ru", "en")
 # Пресеты озвучиваются моделью CustomVoice: ей референс не нужен, но и
 # клонировать она не умеет -- это другой путь генерации.
 # Модель для пресетных голосов. Берётся из кэша HuggingFace, а не из
@@ -135,15 +125,15 @@ def available_voices():
     apple = [f"apple:{v['identifier']}|{v['name']} · {v['language']} · "
              f"{v['quality']}|{v['language'][:2]}"
              for v in apple_voices()
-             if v["language"][:2] in REFERENCE]
+             if v["language"][:2] in ЯЗЫКИ]
     kok = []
     for v in kokoro_voices():
         eng, name = v.split(":", 1)
         if eng == "kokoro-ru":
-            label, язык = f"{name} · русский", "ru"
+            label, язык = f"{name} · {т('русский')}", "ru"
         else:
-            lang = KOKORO_LANG.get(name[:1], "")
-            sex = "жен." if name[1:2] == "f" else "муж."
+            lang = т(KOKORO_LANG.get(name[:1], ""))
+            sex = т("жен." if name[1:2] == "f" else "муж.")
             label, язык = f"{name[3:]} · {lang} · {sex}", "en"
         kok.append(f"{v}|{label}|{язык}")
 
@@ -153,30 +143,6 @@ def available_voices():
     return {"референсы": рефы, "пресеты": пресеты, "система": apple,
             "быстрые": kok}
 SPOKEN = {"ru": ("Russian", "ru"), "en": ("English", "en")}
-
-
-def detect_language(epub_path):
-    """Язык из метаданных книги, а при их отсутствии — по доле кириллицы."""
-    import ebooklib
-    from ebooklib import epub
-    book = epub.read_epub(epub_path)
-    for _, value in (book.get_metadata("DC", "language") or [("", "")]):
-        code = (value or "").strip().lower()[:2] if isinstance(value, str) else ""
-        if code in REFERENCE:
-            return code, "метаданные книги"
-    sys.path.insert(0, HERE)
-    from narrate import chapter_text
-    text = ""
-    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-        text += " ".join(chapter_text(item.get_content()))
-        if len(text) > 4000:
-            break
-    letters = [c for c in text if c.isalpha()]
-    if not letters:
-        return "en", "по умолчанию (текста не нашлось)"
-    cyr = sum("CYRILLIC" in unicodedata.name(c, "") for c in letters)
-    share = cyr / len(letters)
-    return ("ru" if share > 0.3 else "en"), f"по тексту, кириллицы {share:.0%}"
 
 
 def own_process_group():
@@ -217,21 +183,20 @@ def run_stage(cmd, name):
     except KeyboardInterrupt:
         proc.terminate()
         proc.wait()
-        sys.exit(f"{name}: остановлено")
+        sys.exit(т("{этап}: остановлено", этап=т(name)))
     if code != 0:
         # Внятная строка для окна: без неё человек видит только «прервалось»
         # и идёт читать журнал.
         причина = ""
         for line in reversed(хвост):
-            line = line.strip()
-            if line.startswith(("RuntimeError:", "FileNotFoundError:",
-                                "ValueError:", "OSError:")):
-                причина = line.split(":", 1)[1].strip()
-                break
-            if line.startswith("не найден") or line.startswith("не удалось"):
-                причина = line
-                break
-        print(f"СБОЙ {name}: {причина or f'код {code}'}", flush=True)
+            line = line.rstrip()
+            if (not line or line.startswith((" ", "\t", "Traceback"))
+                    or ("%|" in line and "it" in line)):
+                continue
+            m = re.match(r"^[\w.]*(?:Error|Exception)\w*: (.+)$", line)
+            причина = m.group(1) if m else line
+            break
+        print(f"СБОЙ {т(name)}: {причина or т('код {код}', код=code)}", flush=True)
         sys.exit(1)
 
 
@@ -250,26 +215,55 @@ def превратить_pdf(pdf, python_по_умолчанию):
     from registry import env_python, is_ready
 
     if not is_ready("docling"):
-        print("ЭТАП ставлю разборщик PDF", flush=True)
+        print("ЭТАП " + т("ставлю разборщик PDF"), flush=True)
         код = subprocess.call([sys.executable,
                                os.path.join(HERE, "engines", "install.py"),
                                "docling"])
         if код != 0:
-            sys.exit("не удалось поставить разборщик PDF")
+            sys.exit(т("не удалось поставить разборщик PDF"))
+
+    # ocrmac -- мост к Vision для сканов -- вошёл в описание docling позже,
+    # чем у людей появилось окружение, поэтому доставляется отдельно. Не
+    # встал -- не беда: книгам с текстовым слоем он не нужен.
+    if subprocess.call([env_python("docling"), "-c",
+                        "import importlib.util as u, sys; "
+                        "sys.exit(u.find_spec('ocrmac') is None)"]) != 0:
+        print("ЭТАП " + т("ставлю распознавание сканов"), flush=True)
+        subprocess.call([env_python("docling"), "-m", "pip", "install", "-q",
+                         "--disable-pip-version-check", "ocrmac"])
 
     готовый = os.path.join(РАБОЧИЙ, slug(pdf) + "__из_pdf.epub")
     os.makedirs(os.path.dirname(готовый), exist_ok=True)
-    if os.path.exists(готовый) and os.path.getmtime(готовый) > os.path.getmtime(pdf):
-        print(f"беру уже разобранный PDF: {os.path.basename(готовый)}", flush=True)
+    if (os.path.exists(готовый) and os.path.getmtime(готовый) > os.path.getmtime(pdf)
+            and есть_текст(готовый)):
+        print(т("беру уже разобранный PDF: {имя}", имя=os.path.basename(готовый)), flush=True)
         return готовый
 
-    print("ЭТАП разбираю PDF", flush=True)
+    print("ЭТАП " + т("разбираю PDF"), flush=True)
     код = subprocess.call([env_python("docling"),
                            os.path.join(HERE, "engines", "pdf2epub.py"), pdf,
                            "--out", готовый])
+    if код == 3:                        # pdf2epub.НЕТ_ТЕКСТА
+        sys.exit(т("в PDF нет текста, и распознать его не удалось"))
     if код != 0:
-        sys.exit("не удалось разобрать PDF")
+        sys.exit(т("не удалось разобрать PDF"))
     return готовый
+
+
+def есть_текст(epub):
+    """Есть ли в разобранном PDF хоть один абзац.
+
+    Сканы до появления распознавания разбирались в книгу из одних картинок,
+    и такой кэш надо разобрать заново, а не озвучивать пустоту.
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(epub) as z:
+            return any(re.search(rb"<(p|li|h1)[ >]", z.read(n))
+                       for n in z.namelist()
+                       if "/text/" in n and n.endswith(".xhtml"))
+    except zipfile.BadZipFile:
+        return False
 
 
 def sha_of(path, limit=1 << 20):
@@ -280,6 +274,24 @@ def sha_of(path, limit=1 << 20):
     with open(path, "rb") as f:
         h.update(f.read(limit))
     return h.hexdigest()[:16]
+
+
+def длительность_wav(путь):
+    import struct
+    with open(путь, "rb") as f:
+        if f.read(12)[8:12] != b"WAVE":
+            return 0.0
+        в_секунду = 0
+        while True:
+            заголовок = f.read(8)
+            if len(заголовок) < 8:
+                return 0.0
+            имя, размер = заголовок[:4], struct.unpack("<I", заголовок[4:])[0]
+            if имя == b"data":
+                return размер / в_секунду if в_секунду else 0.0
+            данные = f.read(размер + (размер & 1))
+            if имя == b"fmt ":
+                в_секунду = struct.unpack("<I", данные[8:12])[0]
 
 
 def slug(path):
@@ -298,8 +310,8 @@ def main():
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--python", default=sys.executable,
                     help="python с mlx-audio")
-    ap.add_argument("--language", help="ru или en, если определять не нужно")
-    ap.add_argument("--voice", help="имя референса из refs/ или пресет CustomVoice")
+    ap.add_argument("--language", choices=ЯЗЫКИ, help="язык книги")
+    ap.add_argument("--voice", help="голос из --list-voices")
     ap.add_argument("--model", help="путь или идентификатор модели")
     ap.add_argument("--speed", type=float, default=1.0,
                     help="темп речи, применяется после синтеза")
@@ -318,21 +330,19 @@ def main():
             print(f"{group}: {', '.join(names)}")
         return
 
-    if not args.book:
-        ap.error("не указана книга")
+    if not args.book or not args.language or not args.voice:
+        ap.error("нужны книга, --language и --voice")
     own_process_group()
     book = os.path.abspath(args.book)
     if not os.path.exists(book):
-        sys.exit(f"нет такого файла: {book}")
+        sys.exit(т("нет такого файла: {путь}", путь=book))
 
     исходный_pdf = None
     if book.lower().endswith(".pdf"):
         исходный_pdf = book
         book = превратить_pdf(book, args.python)
 
-    lang, how = (args.language, "задан вручную") if args.language else detect_language(book)
-    if lang not in REFERENCE:
-        sys.exit(f"язык {lang!r} пока не поддержан; есть: {', '.join(REFERENCE)}")
+    lang = args.language
     spoken, code = SPOKEN[lang]
 
     apple = (args.voice[len("apple:"):].split("|")[0]
@@ -344,16 +354,14 @@ def main():
     preset = args.voice if args.voice in PRESETS else None
     ref = None
     if not preset and not apple and not kokoro:
-        name = args.voice or REFERENCE[lang]
-        ref = os.path.join(REFS, name)
+        ref = os.path.join(REFS, args.voice)
         if not (os.path.exists(ref + ".wav") and os.path.exists(ref + ".txt")):
-            sys.exit(f"нет такого голоса: {name}\n"
-                     f"доступные: {available_voices()}")
+            sys.exit(т("нет такого голоса: {имя}", имя=args.voice))
 
     # В имя рабочей папки входит голос и темп: фрагменты кэшируются, и без
     # этого прогон другим голосом молча подхватил бы чужую озвучку.
     voice_tag = re.sub(r"[^\w.-]+", "_",
-                       (args.voice or REFERENCE[lang]).replace(":", "-"))
+                       args.voice.replace(":", "-"))
     if abs(args.speed - 1.0) > 1e-3:
         voice_tag += f"@{args.speed:g}"
     work = args.out or os.path.join(РАБОЧИЙ, f"{slug(book)}__{voice_tag}")
@@ -363,13 +371,17 @@ def main():
     final = args.epub_out or os.path.join(dest, stem + "_overlay.epub")
     m4b = os.path.join(dest, stem + ".m4b")
     os.makedirs(work, exist_ok=True)
-    отпечаток = {"голос": args.voice or REFERENCE[lang], "язык": lang,
+    отпечаток = {"голос": args.voice, "язык": lang,
                  "темп": args.speed, "книга": sha_of(book)}
+    # Пакетный синтез прежних версий терял образец голоса: фрагменты тех
+    # прогонов озвучены чужим голосом, продолжать поверх них нельзя.
+    if ref:
+        отпечаток["клонирование"] = 2
     прежний = st.load(work)
     if прежний and прежний.get("отпечаток") != отпечаток:
         import shutil
-        print(f"прежняя работа не подходит ({прежний.get('отпечаток', {}).get('голос')}), "
-              f"начинаю заново", flush=True)
+        print(т("прежняя работа не подходит ({голос}), начинаю заново",
+                голос=прежний.get("отпечаток", {}).get("голос")), flush=True)
         shutil.rmtree(work, ignore_errors=True)
         os.makedirs(work, exist_ok=True)
     elif прежний and not прежний.get("завершён"):
@@ -379,21 +391,21 @@ def main():
     st.save(work, отпечаток=отпечаток, завершён=False, этап="извлечение")
 
     model = args.model or (CUSTOM_VOICE_MODEL if preset else None)
-    print(f"книга:    {os.path.basename(book)}")
-    print(f"язык:     {lang}  ({how})")
+    print(т("книга:    {имя}", имя=os.path.basename(book)))
+    print(т("язык:     {язык}", язык=lang))
     if kokoro:
-        print(f"голос:    {kokoro[1]} ({kokoro[0]}, быстрый синтез)")
+        print(т("голос:    {имя} ({движок}, быстрый синтез)", имя=kokoro[1], движок=kokoro[0]))
     elif apple:
-        print(f"голос:    {apple.split('.')[-1]} (системный, подсветка по словам)")
+        print(т("голос:    {имя} (системный, подсветка по словам)", имя=apple.split(".")[-1]))
+    elif preset:
+        print(т("голос:    {имя} (пресет)", имя=preset))
     else:
-        print(f"голос:    {preset + ' (пресет)' if preset else os.path.basename(ref)}")
+        print(т("голос:    {имя}", имя=os.path.basename(ref)))
     if abs(args.speed - 1.0) > 1e-3:
-        print(f"темп:     {args.speed}x")
-    # Правка mlx-audio больше не нужна: в 0.5.3 ошибку с encoder_config
-    # исправили, и патч из проекта убран.
-    print(f"папка:    {dest}")
-    print(f"результат: {'аудиокнига и EPUB' if args.format == 'both' else ('аудиокнига' if args.format == 'm4b' else 'EPUB с подсветкой')}\n",
-          flush=True)
+        print(т("темп:     {темп}x", темп=args.speed))
+    print(т("папка:    {папка}", папка=dest))
+    что = {"both": "аудиокнига и EPUB", "m4b": "аудиокнига"}.get(args.format, "EPUB с подсветкой")
+    print(т("результат: {что}", что=т(что)) + "\n", flush=True)
 
     # narrate.py всегда исполняется интерпретатором своего движка: там
     # стоят и библиотека синтеза, и ebooklib для разбора книги. Служебный
@@ -403,13 +415,18 @@ def main():
 
     движок = kokoro[0] if kokoro else ("apple" if apple else "qwen")
     if not is_ready(движок):
-        print(f"ЭТАП ставлю движок {движок}", flush=True)
+        print("ЭТАП " + т("ставлю движок {движок}", движок=движок), flush=True)
         код = subprocess.call([sys.executable,
                                os.path.join(HERE, "engines", "install.py"),
                                движок])
         if код != 0 or not is_ready(движок):
-            sys.exit(f"движок {движок} не установился")
+            sys.exit(т("движок {движок} не установился", движок=движок))
     engine_py = env_python(движок)
+    if subprocess.call([engine_py, "-c", "import imageio_ffmpeg"],
+                       stderr=subprocess.DEVNULL) != 0:
+        print("ЭТАП " + т("ставлю ffmpeg"), flush=True)
+        subprocess.call([engine_py, "-m", "pip", "install", "-q",
+                         "--disable-pip-version-check", "imageio-ffmpeg==0.6.0"])
 
     narrate = [engine_py, os.path.join(HERE, "narrate.py"),
                "--epub", book, "--out", work,
@@ -438,13 +455,13 @@ def main():
     st.save(work, этап="сборка",
             фрагментов_готово=len([n for n in os.listdir(каталог_фрагментов(work))
                                    if n.endswith(".wav")]))
-    print("ЭТАП сборка", flush=True)
+    print("ЭТАП " + т("сборка"), flush=True)
 
     title = os.path.splitext(os.path.basename(book))[0][:70]
     produced, commands = [], [" ".join(narrate)]
 
     if args.format in ("epub", "both"):
-        print("ЭТАП сборка книги с подсветкой", flush=True)
+        print("ЭТАП " + т("сборка книги с подсветкой"), flush=True)
         # Озвучка добавляется в исходную книгу: вёрстка, картинки и стили
         # остаются на месте.
         mo = [engine_py, os.path.join(HERE, "mo.py"), "--out", work,
@@ -454,7 +471,7 @@ def main():
         produced.append(final)
 
     if args.format in ("m4b", "both"):
-        print("ЭТАП сборка аудиокниги", flush=True)
+        print("ЭТАП " + т("сборка аудиокниги"), flush=True)
         asm = [engine_py, os.path.join(HERE, "assemble.py"), "--out", work,
                "--title", title, "--m4b"]
         run_stage(asm, "сборка аудиокниги")
@@ -465,7 +482,7 @@ def main():
             produced.append(m4b)
 
     manifest = os.path.join(work, "manifest.json")
-    json.dump({"книга": book, "язык": lang, "определён": how, "формат": args.format,
+    json.dump({"книга": book, "язык": lang, "формат": args.format,
                "голос": (kokoro[1] if kokoro else
                          (apple or preset or os.path.basename(ref))),
                "темп": args.speed,
@@ -479,11 +496,8 @@ def main():
         stats["главы"] = len(chs)
         stats["фрагменты"] = sum(len(c["chunks"]) for c in chs)
         stats["слова"] = sum(len(x.split()) for c in chs for x in c["chunks"])
-        # wave из стандартной библиотеки не читает float-WAV, который
-        # пишет синтез, поэтому длительность берём через soundfile.
-        import soundfile as sf
         parts_dir = os.path.join(work, "parts")
-        total = sum(sf.info(os.path.join(parts_dir, n)).duration
+        total = sum(длительность_wav(os.path.join(parts_dir, n))
                     for n in os.listdir(parts_dir) if n.endswith(".wav"))
         stats["секунды"] = round(total / max(args.speed, 0.01), 1)
         stats["байты"] = sum(os.path.getsize(f) for f in produced
@@ -511,7 +525,7 @@ if __name__ == "__main__":
     try:
         main()
     except SystemExit as e:
-        причина = str(e) if e.code not in (0, None) else ""
+        причина = e.code if isinstance(e.code, str) else ""
         if причина:
             print(f"СБОЙ {причина}", flush=True)
         raise
